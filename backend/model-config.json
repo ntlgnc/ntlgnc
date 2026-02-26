@@ -1,0 +1,31 @@
+{
+  "_comment": "Models listed in 'disabled' will be skipped. Coins in 'disabledCoins' skip LLM calls but still collect candles. Edit via /admin page.",
+  "disabled": [
+    "claude-opus",
+    "llama-70b",
+    "gemini-flash-lite",
+    "claude-sonnet",
+    "mistral-large",
+    "perplexity-sonar-pro",
+    "grok",
+    "perplexity-sonar"
+  ],
+  "enabledForDebate": [
+    "gpt-4o-mini",
+    "claude-haiku",
+    "grok-mini",
+    "gemini-flash",
+    "mistral-medium",
+    "deepseek-v3"
+  ],
+  "disabledCoins": [
+    "DOTUSDT",
+    "SHIBUSDT",
+    "AVAXUSDT",
+    "TONUSDT",
+    "TRXUSDT",
+    "LINKUSDT",
+    "XLMUSDT"
+  ],
+  "loopIntervalMinutes": 5
+}

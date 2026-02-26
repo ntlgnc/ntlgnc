@@ -1,0 +1,15 @@
+services:
+  db:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_USER: frcstr
+      POSTGRES_PASSWORD: secret123
+      POSTGRES_DB: frcstr_db
+    ports:
+      - "5433:5432"   # Maps container 5432 ? your laptop's 5433 (avoids conflict with any existing Postgres)
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+volumes:
+  db-data:

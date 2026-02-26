@@ -1,0 +1,538 @@
+{
+  "coins": {
+    "BTCUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "USD1USDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "ETHUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "SOLUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "XRPUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "BNBUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "PAXGUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "DOGEUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "WLFIUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "TRXUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "PEPEUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "ZECUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "SUIUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "ESPUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "LINKUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "UUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "ADAUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "AVAXUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "BCHUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "KITEUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "ASTERUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "UNIUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "LTCUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "币安人生USDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "PUMPUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "ENAUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "APTUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "TRUMPUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "AGLDUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-25T09:12:17.276Z"
+    },
+    "AAVEUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "ENSOUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "XPLUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "TAOUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "OPUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "NEARUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "ZROUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "ARBUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "WLDUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "HBARUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "FILUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "SENTUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "DASHUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "DOTUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "XUSDUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "LAUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-25T22:12:16.849Z"
+    },
+    "ZAMAUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "ICPUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "PENGUUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "BFUSDUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-25T20:12:26.853Z"
+    },
+    "WIFUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "ZKUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "POLUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "TONUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "BIOUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "EIGENUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "YGGUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-24T01:20:13.895Z"
+    },
+    "VIRTUALUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "SHIBUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "XLMUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "BELUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-24T01:20:13.895Z"
+    },
+    "MORPHOUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "SEIUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "RLUSDUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "BONKUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "FETUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "SNXUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-25T20:12:26.853Z"
+    },
+    "ETCUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "USDEUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "CAKEUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "CHZUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "FXSUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "ATOMUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "GIGGLEUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "OMUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-24T01:20:13.895Z"
+    },
+    "WBTCUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "PENDLEUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "RENDERUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "INJUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "ETHFIUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "ATUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-23T17:26:24.402Z"
+    },
+    "COWUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-24T01:20:13.895Z"
+    },
+    "ONDOUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "LDOUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-24T01:20:13.895Z"
+    },
+    "CRVUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "ARUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "ARPAUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-23T17:26:24.402Z"
+    },
+    "TIAUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "ZENUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-24T01:20:13.895Z"
+    },
+    "JTOUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-24T01:20:13.895Z"
+    },
+    "FLOKIUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "SOMIUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "0GUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "GALAUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "OGUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-24T01:20:13.895Z"
+    },
+    "STRKUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "BERAUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "ROSEUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-25T15:12:17.865Z"
+    },
+    "DUSKUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "RUNEUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "DEXEUSDT": {
+      "firstSeen": "2026-02-23T17:10:30.169Z",
+      "lastInTop100": "2026-02-25T15:12:17.865Z"
+    },
+    "FOGOUSDT": {
+      "firstSeen": "2026-02-23T17:26:24.402Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "LPTUSDT": {
+      "firstSeen": "2026-02-24T00:51:47.708Z",
+      "lastInTop100": "2026-02-24T01:20:13.895Z"
+    },
+    "UMAUSDT": {
+      "firstSeen": "2026-02-24T00:51:47.708Z",
+      "lastInTop100": "2026-02-24T01:20:13.895Z"
+    },
+    "AXSUSDT": {
+      "firstSeen": "2026-02-24T00:51:47.708Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "COTIUSDT": {
+      "firstSeen": "2026-02-24T00:51:47.708Z",
+      "lastInTop100": "2026-02-24T01:20:13.895Z"
+    },
+    "PUNDIXUSDT": {
+      "firstSeen": "2026-02-24T01:20:13.895Z",
+      "lastInTop100": "2026-02-25T02:18:27.507Z"
+    },
+    "GPSUSDT": {
+      "firstSeen": "2026-02-25T01:24:17.618Z",
+      "lastInTop100": "2026-02-25T22:12:16.849Z"
+    },
+    "STEEMUSDT": {
+      "firstSeen": "2026-02-25T01:24:17.618Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "DENTUSDT": {
+      "firstSeen": "2026-02-25T01:24:17.618Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "OGNUSDT": {
+      "firstSeen": "2026-02-25T01:24:17.618Z",
+      "lastInTop100": "2026-02-25T09:12:17.276Z"
+    },
+    "LINEAUSDT": {
+      "firstSeen": "2026-02-25T01:24:17.618Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "LUNAUSDT": {
+      "firstSeen": "2026-02-25T01:24:17.618Z",
+      "lastInTop100": "2026-02-25T02:18:27.507Z"
+    },
+    "ALLOUSDT": {
+      "firstSeen": "2026-02-25T01:24:17.618Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "EULUSDT": {
+      "firstSeen": "2026-02-25T01:24:17.618Z",
+      "lastInTop100": "2026-02-25T15:12:17.865Z"
+    },
+    "METUSDT": {
+      "firstSeen": "2026-02-25T01:24:17.618Z",
+      "lastInTop100": "2026-02-25T02:18:27.507Z"
+    },
+    "SXTUSDT": {
+      "firstSeen": "2026-02-25T01:24:17.618Z",
+      "lastInTop100": "2026-02-25T01:53:29.707Z"
+    },
+    "HOLOUSDT": {
+      "firstSeen": "2026-02-25T01:24:17.618Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "RESOLVUSDT": {
+      "firstSeen": "2026-02-25T01:24:17.618Z",
+      "lastInTop100": "2026-02-25T02:18:27.507Z"
+    },
+    "BREVUSDT": {
+      "firstSeen": "2026-02-25T01:24:17.618Z",
+      "lastInTop100": "2026-02-25T08:12:26.598Z"
+    },
+    "TNSRUSDT": {
+      "firstSeen": "2026-02-25T01:24:17.618Z",
+      "lastInTop100": "2026-02-25T02:18:27.507Z"
+    },
+    "VETUSDT": {
+      "firstSeen": "2026-02-25T02:12:26.865Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "GUNUSDT": {
+      "firstSeen": "2026-02-25T07:53:33.289Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "PARTIUSDT": {
+      "firstSeen": "2026-02-25T07:53:33.289Z",
+      "lastInTop100": "2026-02-25T22:12:16.849Z"
+    },
+    "KERNELUSDT": {
+      "firstSeen": "2026-02-25T08:12:26.598Z",
+      "lastInTop100": "2026-02-25T09:12:17.276Z"
+    },
+    "SXPUSDT": {
+      "firstSeen": "2026-02-25T09:12:17.276Z",
+      "lastInTop100": "2026-02-25T20:12:26.853Z"
+    },
+    "KSMUSDT": {
+      "firstSeen": "2026-02-25T09:12:17.276Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "AXLUSDT": {
+      "firstSeen": "2026-02-25T13:53:40.530Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "FFUSDT": {
+      "firstSeen": "2026-02-25T13:53:40.530Z",
+      "lastInTop100": "2026-02-25T15:12:17.865Z"
+    },
+    "BARDUSDT": {
+      "firstSeen": "2026-02-25T19:53:44.582Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "WBETHUSDT": {
+      "firstSeen": "2026-02-25T19:53:44.582Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "NEIROUSDT": {
+      "firstSeen": "2026-02-25T22:12:16.849Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "API3USDT": {
+      "firstSeen": "2026-02-26T01:53:48.480Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    },
+    "ALGOUSDT": {
+      "firstSeen": "2026-02-26T01:53:48.480Z",
+      "lastInTop100": "2026-02-26T02:17:36.954Z"
+    }
+  },
+  "lastRefresh": 1772072253229,
+  "savedAt": "2026-02-26T02:17:36.956Z"
+}

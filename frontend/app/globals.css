@@ -1,0 +1,194 @@
+@import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── CSS VARIABLES ─── */
+:root {
+  --bg-deep: #06060b;
+  --bg: #0b0b14;
+  --bg-card: #10101c;
+  --bg-card2: #161625;
+  --bg-hover: #1a1a2e;
+  --border: #24243e;
+  --border-bright: #34345a;
+  --text: #e4e4ed;
+  --text-muted: #9898b0;
+  --text-dim: #6e6e8a;
+  --openai: #00d67d;
+  --openai-dim: rgba(0,214,125,0.12);
+  --claude: #a78bfa;
+  --claude-dim: rgba(167,139,250,0.12);
+  --grok: #ff6b35;
+  --grok-dim: rgba(255,107,53,0.12);
+  --up: #00e676;
+  --down: #ff5252;
+  --brand: #f97316;
+  --brand-dim: rgba(249,115,22,0.15);
+}
+
+/* ─── BASE ─── */
+html, body { height: 100%; }
+
+body {
+  background: var(--bg-deep);
+  color: var(--text);
+  font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+  font-size: 13px;
+  overflow-x: hidden;
+  background-image:
+    radial-gradient(ellipse 800px 600px at 20% 10%, rgba(0,214,125,0.03), transparent),
+    radial-gradient(ellipse 600px 500px at 80% 20%, rgba(167,139,250,0.03), transparent),
+    radial-gradient(ellipse 700px 500px at 60% 80%, rgba(255,107,53,0.02), transparent);
+}
+
+/* Grid overlay */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.012) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.012) 1px, transparent 1px);
+  background-size: 48px 48px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ─── UTILITIES ─── */
+.tabular { font-variant-numeric: tabular-nums; }
+
+.font-display { font-family: 'Chakra Petch', sans-serif; }
+.font-mono { font-family: 'JetBrains Mono', monospace; }
+
+/* ─── HEADER ─── */
+.header-blur {
+  background: rgba(6,6,11,0.88);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+/* ─── LIVE DOT ─── */
+.live-dot {
+  box-shadow: 0 0 8px var(--up);
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 8px var(--up); }
+  50% { opacity: 0.4; box-shadow: 0 0 2px var(--up); }
+}
+
+/* ─── SECTION LABELS ─── */
+.section-label {
+  font-family: 'Chakra Petch', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 16px;
+}
+
+/* ─── TABLE STYLES ─── */
+.th-base {
+  background: var(--bg-card2);
+  padding: 12px 16px;
+  font-family: 'Chakra Petch', sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  border-bottom: 1px solid var(--border);
+}
+
+.th-openai {
+  color: var(--openai) !important;
+  border-bottom: 2px solid var(--openai) !important;
+}
+.th-claude {
+  color: var(--claude) !important;
+  border-bottom: 2px solid var(--claude) !important;
+}
+.th-grok {
+  color: var(--grok) !important;
+  border-bottom: 2px solid var(--grok) !important;
+}
+
+/* ─── CONSENSUS BADGES ─── */
+.consensus-badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+  display: inline-block;
+}
+.consensus-bullish {
+  background: rgba(0,230,118,0.12);
+  color: var(--up);
+  border: 1px solid rgba(0,230,118,0.25);
+}
+.consensus-bearish {
+  background: rgba(255,82,82,0.12);
+  color: var(--down);
+  border: 1px solid rgba(255,82,82,0.25);
+}
+.consensus-split {
+  background: rgba(255,255,255,0.06);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+/* ─── PRICE FLASH ─── */
+@keyframes flashGreen { 0% { color: var(--up); } 100% { color: var(--text); } }
+@keyframes flashRed   { 0% { color: var(--down); } 100% { color: var(--text); } }
+.flash-up   { animation: flashGreen 1s ease; }
+.flash-down { animation: flashRed 1s ease; }
+
+/* ─── ENTRANCE ANIMATION ─── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-in { animation: fadeUp 0.5s ease both; }
+
+/* ─── COIN ICON GRADIENTS ─── */
+.ic-btc  { background: linear-gradient(135deg, #f7931a, #f2a900); }
+.ic-eth  { background: linear-gradient(135deg, #627eea, #8fa2ef); }
+.ic-sol  { background: linear-gradient(135deg, #9945ff, #14f195); }
+.ic-bnb  { background: linear-gradient(135deg, #f3ba2f, #f0b90b); }
+.ic-xrp  { background: linear-gradient(135deg, #00aae4, #23292f); }
+.ic-ada  { background: linear-gradient(135deg, #0033ad, #3468c0); }
+.ic-avax { background: linear-gradient(135deg, #e84142, #ff5b56); }
+.ic-dot  { background: linear-gradient(135deg, #e6007a, #ff1864); }
+.ic-matic{ background: linear-gradient(135deg, #8247e5, #a67fff); }
+.ic-link { background: linear-gradient(135deg, #2a5ada, #4c7fef); }
+.ic-ton  { background: linear-gradient(135deg, #0098ea, #45aaf2); }
+.ic-trx  { background: linear-gradient(135deg, #ff0013, #eb0029); }
+.ic-xlm  { background: linear-gradient(135deg, #14b6e7, #0091ea); }
+.ic-ltc  { background: linear-gradient(135deg, #bfbbbb, #838383); }
+.ic-atom { background: linear-gradient(135deg, #2e3148, #6f7390); }
+.ic-uni  { background: linear-gradient(135deg, #ff007a, #ff5ca0); }
+.ic-algo { background: linear-gradient(135deg, #1a1a2e, #444); }
+.ic-vet  { background: linear-gradient(135deg, #15bdff, #0098df); }
+.ic-fil  { background: linear-gradient(135deg, #0090ff, #42c1ca); }
+.ic-hbar { background: linear-gradient(135deg, #1a1a2e, #474747); }
+
+/* ─── SCROLLBAR ─── */
+*::-webkit-scrollbar { height: 8px; width: 8px; }
+*::-webkit-scrollbar-thumb { background: #2a2a3a; border-radius: 999px; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* ─── TAILWIND OVERRIDES ─── */
+@layer utilities {
+  .text-brand { color: var(--brand); }
+  .text-up    { color: var(--up); }
+  .text-down  { color: var(--down); }
+  .text-muted { color: var(--text-muted); }
+  .text-dim   { color: var(--text-dim); }
+  .bg-brand   { background-color: var(--brand); }
+  .border-brand { border-color: var(--brand); }
+}

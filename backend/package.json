@@ -1,0 +1,23 @@
+{
+  "name": "ntlgnc",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "AI Combat Arena - Crypto forecasting battle",
+  "scripts": {
+    "data": "node live-fetch.cjs",
+    "forecast": "node forecast-engine.js",
+    "score": "node scoring-engine.js",
+    "dashboard": "node dashboard.js",
+    "leaderboard": "node leaderboard-full.js",
+    "status": "node quick-status.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.73.0",
+    "@prisma/client": "^6.6.0",
+    "dotenv": "^16.6.1",
+    "node-fetch": "^3.3.2",
+    "openai": "^4.0.0",
+    "pg": "^8.12.0",
+    "prisma": "^6.6.0"
+  }
+}
