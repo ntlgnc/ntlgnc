@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import AdminNav from "@/components/AdminNav";
 
 const GOLD = "#D4A843";
 const BG = "#080a10";
@@ -138,12 +139,13 @@ function Legend({ horizontal }: { horizontal?: boolean }) {
 }
 
 // ── Half Grid (one direction) for mobile ──
-function HalfGrid({ direction, features, getCellMode, getBoardVote, getSR, cycle, dirLabel, dirColor }: {
+function HalfGrid({ direction, features, getCellMode, getBoardVote, getSR, getRho, cycle, dirLabel, dirColor }: {
   direction: "long" | "short";
   features: typeof FEATURES;
   getCellMode: (f: string, b: string, d: string) => CellMode;
   getBoardVote: (f: string, b: string, d: string) => boolean;
   getSR: (f: string, bi: number, d: "long" | "short") => number | null;
+  getRho: (f: string, bi: number, d: "long" | "short") => { rho: number | null; confidence: string | null } | null;
   cycle: (f: string, b: string, d: string) => void;
   dirLabel: string;
   dirColor: string;
@@ -166,6 +168,13 @@ function HalfGrid({ direction, features, getCellMode, getBoardVote, getSR, cycle
               const boardBlocked = getBoardVote(feat.key, bucket, dirUpper);
               const sr = getSR(feat.key, bi, direction);
               const hasSR = sr !== null && sr !== undefined;
+              const rhoData = getRho(feat.key, bi, direction);
+              const rho = rhoData?.rho;
+              const rhoColor = rho === null || rho === undefined ? "rgba(239,68,68,0.5)"
+                : rho >= 0.8 ? "rgba(34,197,94,0.7)"
+                : rho >= 0.4 ? "rgba(134,239,172,0.6)"
+                : rho >= 0 ? "rgba(234,179,8,0.6)"
+                : "rgba(239,68,68,0.6)";
               let borderStyle: string, bgStyle: string, textColor: string, shadow = "none";
 
               if (mode === "locked_block") {
@@ -192,13 +201,16 @@ function HalfGrid({ direction, features, getCellMode, getBoardVote, getSR, cycle
                 <button key={bi}
                   onClick={() => cycle(feat.key, bucket, dirUpper)}
                   className="rounded font-mono text-center relative"
-                  style={{ height: 44, background: bgStyle, border: borderStyle, boxShadow: shadow, cursor: "pointer" }}>
+                  style={{ height: 54, background: bgStyle, border: borderStyle, boxShadow: shadow, cursor: "pointer" }}>
                   <div className="text-[7px] font-mono text-white/25 absolute top-0.5 left-1 right-1 truncate">{bucket}</div>
                   {hasSR ? (
                     <span className="text-[13px] font-black tabular-nums" style={{ color: textColor }}>{sr!.toFixed(1)}</span>
                   ) : (
                     <span className="text-[10px]" style={{ color: textColor }}>–</span>
                   )}
+                  <div className="text-[7px] font-mono font-bold absolute bottom-0.5 left-1 right-1" style={{ color: rhoColor }}>
+                    {rho !== null && rho !== undefined ? `ρ${rho.toFixed(1)}` : "no ρ"}
+                  </div>
                   {mode !== "auto" && <span className="absolute top-0.5 right-0.5 text-[6px]">🔒</span>}
                   {mode === "auto" && boardBlocked && <span className="absolute top-0.5 right-0.5 text-[6px]">🤖</span>}
                 </button>
@@ -221,6 +233,7 @@ export default function FilterMatrixPage() {
   const [matrix, setMatrix] = useState<MatrixState>({});
   const [boardVotes, setBoardVotes] = useState<BoardVotes>({});
   const [scorecard, setScorecard] = useState<ScorecardMap>({});
+  const [rhoMap, setRhoMap] = useState<Record<number, any>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -236,6 +249,7 @@ export default function FilterMatrixPage() {
       if (d.matrix) setMatrix(d.matrix);
       if (d.boardVotes) setBoardVotes(d.boardVotes);
       if (d.scorecard) setScorecard(d.scorecard);
+      if (d.rhoMap) setRhoMap(d.rhoMap);
       if (!activeStratId && d.strategies?.length > 0) setActiveStratId(d.strategies[0].id);
     } catch (e) { console.error(e); }
     setLoading(false);
@@ -284,6 +298,12 @@ export default function FilterMatrixPage() {
     const strat = strategies.find(s => s.id === activeStratId);
     if (!strat) return null;
     return scorecard[strat.barMinutes]?.[featureKey]?.[bucketIndex]?.[direction] ?? null;
+  };
+
+  const getRho = (featureKey: string, bucketIndex: number, direction: "long" | "short"): { rho: number | null; confidence: string | null } | null => {
+    const strat = strategies.find(s => s.id === activeStratId);
+    if (!strat) return null;
+    return rhoMap[strat.barMinutes]?.[featureKey]?.[bucketIndex]?.[direction] ?? null;
   };
 
   const featurePassesThreshold = (featureKey: string): boolean => {
@@ -336,6 +356,13 @@ export default function FilterMatrixPage() {
     const boardBlocked = getBoardVote(feature, bucket, dirUpper);
     const sr = getSR(feature, bucketIndex, direction);
     const hasSR = sr !== null && sr !== undefined;
+    const rhoData = getRho(feature, bucketIndex, direction);
+    const rhoVal = rhoData?.rho;
+    const cellRhoColor = rhoVal === null || rhoVal === undefined ? "rgba(239,68,68,0.5)"
+      : rhoVal >= 0.8 ? "rgba(34,197,94,0.7)"
+      : rhoVal >= 0.4 ? "rgba(134,239,172,0.6)"
+      : rhoVal >= 0 ? "rgba(234,179,8,0.6)"
+      : "rgba(239,68,68,0.6)";
     let borderStyle: string, bgStyle: string, textColor: string, shadow = "none";
 
     if (mode === "locked_block") {
@@ -359,13 +386,16 @@ export default function FilterMatrixPage() {
     return (
       <button onClick={() => cycle(feature, bucket, dirUpper)}
         className="w-full rounded transition-all duration-150 font-mono relative"
-        style={{ height: 44, background: bgStyle, border: borderStyle, cursor: "pointer", boxShadow: shadow }}
-        title={`${feature} / ${bucket} / ${dirUpper}\n${mode === "locked_block" ? "🔒 LOCKED BLOCK" : mode === "locked_pass" ? "🔓 LOCKED PASS" : boardBlocked ? "🤖 BOARD BLOCKED" : "AUTO"}`}>
+        style={{ height: 54, background: bgStyle, border: borderStyle, cursor: "pointer", boxShadow: shadow }}
+        title={`${feature} / ${bucket} / ${dirUpper}\nρ=${rhoVal != null ? rhoVal.toFixed(1) : '?'} | ${mode === "locked_block" ? "🔒 LOCKED BLOCK" : mode === "locked_pass" ? "🔓 LOCKED PASS" : boardBlocked ? "🤖 BOARD BLOCKED" : "AUTO"}`}>
         {hasSR ? (
           <span className="text-[13px] font-black tabular-nums" style={{ color: textColor }}>{sr!.toFixed(1)}</span>
         ) : (
           <span className="text-[10px]" style={{ color: textColor }}>–</span>
         )}
+        <div className="text-[7px] font-mono font-bold absolute bottom-0.5 left-1 right-1" style={{ color: cellRhoColor }}>
+          {rhoVal !== null && rhoVal !== undefined ? `ρ${rhoVal.toFixed(1)}` : "no ρ"}
+        </div>
         {mode !== "auto" && <span className="absolute top-0.5 right-1 text-[7px]" style={{ color: mode === "locked_block" ? RED : GREEN }}>🔒</span>}
         {mode === "auto" && boardBlocked && <span className="absolute top-0.5 right-1 text-[7px]">🤖</span>}
       </button>
@@ -390,12 +420,7 @@ export default function FilterMatrixPage() {
       </nav>
 
       <div className="max-w-7xl mx-auto px-3 sm:px-6 pt-18 sm:pt-20 pb-12">
-        {/* Breadcrumb */}
-        <div className="flex items-center gap-4 mb-2 pt-2">
-          <a href="/admin" className="text-[11px] font-mono" style={{ color: MUTED }}>← Admin</a>
-          <a href="/admin/filter-audit" className="text-[11px] font-mono" style={{ color: MUTED }}>Filter Audit</a>
-          <a href="/admin/filter-impact" className="text-[11px] font-mono" style={{ color: MUTED }}>Filter Impact</a>
-        </div>
+        <AdminNav />
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-3">
           <div>
@@ -507,10 +532,10 @@ export default function FilterMatrixPage() {
             {/* ═══ MOBILE: two stacked grids (Longs then Shorts) ═══ */}
             <div className="md:hidden space-y-4">
               <HalfGrid direction="long" features={filteredFeatures}
-                getCellMode={getCellMode} getBoardVote={getBoardVote} getSR={getSR}
+                getCellMode={getCellMode} getBoardVote={getBoardVote} getSR={getSR} getRho={getRho}
                 cycle={cycle} dirLabel="▲ LONGS" dirColor={GREEN} />
               <HalfGrid direction="short" features={filteredFeatures}
-                getCellMode={getCellMode} getBoardVote={getBoardVote} getSR={getSR}
+                getCellMode={getCellMode} getBoardVote={getBoardVote} getSR={getSR} getRho={getRho}
                 cycle={cycle} dirLabel="▼ SHORTS" dirColor={RED} />
             </div>
           </>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import AdminNav from "@/components/AdminNav";
 
 const GOLD = "#D4A843";
 const GREEN = "#22c55e";
@@ -269,11 +270,7 @@ export default function FilterImpactDashboard() {
 
   return (
     <div className="max-w-5xl mx-auto px-6 py-8">
-      <div className="flex items-center gap-4 mb-2">
-        <a href="/admin" className="text-[11px] font-mono" style={{ color: MUTED }}>← Admin</a>
-        <a href="/admin/filter-audit" className="text-[11px] font-mono" style={{ color: MUTED }}>Filter Audit</a>
-        <a href="/admin/filter-matrix" className="text-[11px] font-mono" style={{ color: MUTED }}>Filter Matrix</a>
-      </div>
+      <AdminNav />
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-lg font-mono font-bold" style={{ color: GOLD }}>
