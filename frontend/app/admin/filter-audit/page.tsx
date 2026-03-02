@@ -11,6 +11,19 @@ const MUTED = "rgba(255,255,255,0.4)";
 
 // ── Types ──
 
+type BoardFilterScorecard = {
+  rho: number | null;
+  confidence: string | null;
+  buckets: Array<{
+    bucket: string;
+    direction: string;
+    rho: number | null;
+    confidence: string | null;
+    oos_sharpe: number | null;
+    oos_trades: number;
+  }>;
+} | null;
+
 type FilterSeries = {
   filter_id: number;
   feature: string;
@@ -24,6 +37,7 @@ type FilterSeries = {
   avg_inverted_per_trade: number;
   verdict: string;
   source?: string;
+  scorecard?: BoardFilterScorecard;
   series: Array<{
     time: string;
     symbol: string;
@@ -33,6 +47,13 @@ type FilterSeries = {
     cumulative_inverted: number;
   }>;
 };
+
+type ScorecardData = {
+  rho: number | null;
+  confidence: string | null;
+  oos_sharpe: number | null;
+  oos_trades: number;
+} | null;
 
 type MatrixCell = {
   strategy_id: string;
@@ -45,6 +66,7 @@ type MatrixCell = {
   source: string;
   signals_blocked: number;
   counterfactual: { total_return: number; avg_return: number; win_rate: number };
+  scorecard: ScorecardData;
   verdict: string;
 };
 
@@ -155,12 +177,14 @@ function MiniChart({
 
 function VerdictBadge({ verdict }: { verdict: string }) {
   const color =
-    verdict === "HELPING" ? GREEN : verdict === "HURTING" ? RED : MUTED;
+    verdict === "HELPING" ? GREEN : verdict === "HURTING" ? RED : verdict === "DORMANT" ? BLUE : MUTED;
   const label =
     verdict === "HELPING"
       ? "HELPING"
       : verdict === "HURTING"
       ? "HURTING"
+      : verdict === "DORMANT"
+      ? "DORMANT"
       : "INSUFFICIENT";
   return (
     <span
@@ -186,6 +210,31 @@ function SourceBadge({ source }: { source: string }) {
       style={{ color, background: `${color}18`, border: `1px solid ${color}30` }}
     >
       {label}
+    </span>
+  );
+}
+
+function RhoBadge({ scorecard }: { scorecard: ScorecardData }) {
+  if (!scorecard || scorecard.rho === null) {
+    return (
+      <span
+        className="text-[9px] font-mono px-1.5 py-0.5 rounded"
+        style={{ color: RED, background: `${RED}15`, border: `1px solid ${RED}25` }}
+      >
+        NO RHO
+      </span>
+    );
+  }
+  const rho = scorecard.rho;
+  const color = rho >= 0.8 ? GREEN : rho >= 0.4 ? "#86efac" : rho >= 0 ? "#eab308" : RED;
+  const conf = scorecard.confidence || "?";
+  return (
+    <span
+      className="text-[9px] font-mono px-1.5 py-0.5 rounded"
+      style={{ color, background: `${color}15`, border: `1px solid ${color}25` }}
+    >
+      ρ={rho.toFixed(1)} {conf !== "?" ? conf.toUpperCase().slice(0, 4) : ""}
+      {scorecard.oos_sharpe != null ? ` SR=${scorecard.oos_sharpe.toFixed(1)}` : ""}
     </span>
   );
 }
@@ -238,6 +287,20 @@ function BoardFilterCard({ data }: { data: FilterSeries }) {
         <span>Active: <span style={{ color: "rgba(255,255,255,0.7)" }}>{hoursActive}h</span></span>
         <span>Filtered: <span style={{ color: "rgba(255,255,255,0.7)" }}>{data.trades_filtered}</span></span>
       </div>
+      {/* Scorecard rho row */}
+      {data.scorecard && (
+        <div className="flex items-center gap-3 mb-3">
+          <RhoBadge scorecard={data.scorecard.rho != null ? {
+            rho: data.scorecard.rho,
+            confidence: data.scorecard.confidence,
+            oos_sharpe: null,
+            oos_trades: 0,
+          } : null} />
+          <span className="text-[9px] font-mono" style={{ color: MUTED }}>
+            {data.feature} feature
+          </span>
+        </div>
+      )}
       <MiniChart data={data} width={380} height={100} />
       <div className="flex items-center justify-between mt-2">
         <span className="text-[10px] font-mono" style={{ color: MUTED }}>Cumulative filter value</span>
@@ -299,6 +362,15 @@ function MatrixLockCard({ data }: { data: MatrixCell }) {
         <span>Direction: <span style={{ color: "rgba(255,255,255,0.7)" }}>{data.direction}</span></span>
         <span>Mode: <span style={{ color: borderColor }}>{data.mode.replace("_", " ").toUpperCase()}</span></span>
         <span>Blocked: <span style={{ color: "rgba(255,255,255,0.7)" }}>{data.signals_blocked}</span></span>
+      </div>
+      {/* Scorecard rho row */}
+      <div className="flex items-center gap-3 mb-3">
+        <RhoBadge scorecard={data.scorecard} />
+        {data.scorecard?.oos_trades != null && (
+          <span className="text-[9px] font-mono" style={{ color: MUTED }}>
+            {data.scorecard.oos_trades.toLocaleString()} scorecard trades
+          </span>
+        )}
       </div>
       <div className="flex items-center justify-between mt-1">
         <span className="text-[10px] font-mono" style={{ color: MUTED }}>Counterfactual return</span>

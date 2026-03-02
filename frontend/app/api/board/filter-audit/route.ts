@@ -389,6 +389,42 @@ async function handleBoardFilters(client: any, hours: number) {
   const strategyMap: Record<string, number> = {};
   for (const s of stratRows) strategyMap[s.id] = s.barMinutes;
 
+  // Load scorecard for cross-reference
+  let scorecardRows: any[] = [];
+  try {
+    const sc = await client.query(
+      `SELECT feature_key, bucket_label, direction_filter, bar_minutes, rho, confidence, oos_sharpe, oos_trades
+       FROM regime_scorecard`
+    );
+    scorecardRows = sc.rows;
+  } catch {}
+
+  // For a board filter, find the best-matching scorecard rows for its feature
+  function filterScorecard(feature: string, timeframe: string | null) {
+    const barMinutes = timeframe === "1d" ? 1440 : timeframe === "1h" ? 60 : timeframe === "1m" ? 1 : null;
+    const matching = scorecardRows.filter(
+      (r: any) => r.feature_key === feature && (barMinutes ? r.bar_minutes === barMinutes : true)
+    );
+    if (matching.length === 0) return null;
+    // Return summary: best rho across direction_filter='all' rows
+    const allRows = matching.filter((r: any) => r.direction_filter === "all");
+    const dirRows = matching.filter((r: any) => r.direction_filter !== "all");
+    const bestAll = allRows.length > 0 ? allRows.reduce((best: any, r: any) =>
+      (r.rho != null && (best.rho == null || Math.abs(r.rho) > Math.abs(best.rho))) ? r : best, allRows[0]) : null;
+    return {
+      rho: bestAll?.rho != null ? parseFloat(bestAll.rho) : null,
+      confidence: bestAll?.confidence || null,
+      buckets: matching.map((r: any) => ({
+        bucket: r.bucket_label,
+        direction: r.direction_filter,
+        rho: r.rho != null ? parseFloat(r.rho) : null,
+        confidence: r.confidence,
+        oos_sharpe: r.oos_sharpe != null ? parseFloat(r.oos_sharpe) : null,
+        oos_trades: r.oos_trades != null ? parseInt(r.oos_trades) : 0,
+      })),
+    };
+  }
+
   const result: Record<string, any> = {};
 
   for (const filter of filters) {
@@ -453,6 +489,7 @@ async function handleBoardFilters(client: any, hours: number) {
       avg_inverted_per_trade: Math.round(avgInverted * 10000) / 10000,
       verdict,
       source: "board_filter",
+      scorecard: filterScorecard(filter.feature, filter.timeframe),
       series,
     };
   }
@@ -489,6 +526,34 @@ async function handleMatrixLocks(client: any, hours: number) {
   for (const s of stratRows) {
     strategyMap[s.id] = s.barMinutes;
     strategyNames[s.id] = s.name;
+  }
+
+  // Load scorecard rho/SR for cross-reference
+  const scorecardMap: Record<string, any> = {};
+  try {
+    const sc = await client.query(
+      `SELECT feature_key, bucket_label, direction_filter, bar_minutes, rho, confidence, oos_sharpe, oos_trades
+       FROM regime_scorecard`
+    );
+    for (const r of sc.rows) {
+      const key = `${r.feature_key}|${r.bucket_label}|${r.direction_filter}|${r.bar_minutes}`;
+      scorecardMap[key] = {
+        rho: r.rho != null ? parseFloat(r.rho) : null,
+        confidence: r.confidence,
+        oos_sharpe: r.oos_sharpe != null ? parseFloat(r.oos_sharpe) : null,
+        oos_trades: r.oos_trades != null ? parseInt(r.oos_trades) : 0,
+      };
+    }
+  } catch {}
+
+  // Helper to look up scorecard for a cell
+  function lookupScorecard(featureKey: string, bucketLabel: string, direction: string, barMinutes: number | null) {
+    if (!barMinutes) return null;
+    // Try direction-specific first, then 'all'
+    const dirKey = `${featureKey}|${bucketLabel}|${direction.toLowerCase()}|${barMinutes}`;
+    if (scorecardMap[dirKey]) return scorecardMap[dirKey];
+    const allKey = `${featureKey}|${bucketLabel}|all|${barMinutes}`;
+    return scorecardMap[allKey] || null;
   }
 
   // Get unattributed filtered signals
@@ -566,6 +631,7 @@ async function handleMatrixLocks(client: any, hours: number) {
         ? "HELPING"
         : "HURTING";
 
+    const sc = lookupScorecard(cell.feature_key, cell.bucket_label, cell.direction, cell.bar_minutes);
     cells.push({
       ...cell,
       signals_blocked: cellSigs.length,
@@ -574,11 +640,47 @@ async function handleMatrixLocks(client: any, hours: number) {
         avg_return: Math.round(avgReturn * 10000) / 10000,
         win_rate: Math.round(winRate * 10) / 10,
       },
+      scorecard: sc,
       verdict,
     });
   }
 
-  cells.sort((a, b) => a.counterfactual.total_return - b.counterfactual.total_return);
+  // Add dormant locks (exist in matrix but blocked zero signals in window)
+  const activeCellKeys = new Set(Object.keys(cellMap));
+  const allLocks = matrixRows.filter((r: any) => r.mode === "locked_block");
+  const blockedVotes = voteRows.filter((r: any) => r.blocked);
+  const allBlockSources = [
+    ...allLocks.map((r: any) => ({ ...r, source: "operator" })),
+    ...blockedVotes.map((r: any) => ({ ...r, mode: "board_vote", source: "board_vote" })),
+  ];
+
+  for (const lock of allBlockSources) {
+    const cellKey = `${lock.strategy_id}|${lock.feature_key}|${lock.bucket_label}|${lock.direction}|${lock.mode}`;
+    if (activeCellKeys.has(cellKey)) continue; // Already in results
+    const barMins = strategyMap[lock.strategy_id] || null;
+    const sc = lookupScorecard(lock.feature_key, lock.bucket_label, lock.direction, barMins);
+    cells.push({
+      strategy_id: lock.strategy_id,
+      strategy_name: strategyNames[lock.strategy_id] || lock.strategy_id,
+      bar_minutes: barMins,
+      feature_key: lock.feature_key,
+      bucket_label: lock.bucket_label,
+      direction: lock.direction,
+      mode: lock.mode,
+      source: lock.source,
+      signals_blocked: 0,
+      counterfactual: { total_return: 0, avg_return: 0, win_rate: 0 },
+      scorecard: sc,
+      verdict: "DORMANT",
+    });
+  }
+
+  cells.sort((a, b) => {
+    // Active first, then dormant
+    if (a.signals_blocked > 0 && b.signals_blocked === 0) return -1;
+    if (a.signals_blocked === 0 && b.signals_blocked > 0) return 1;
+    return a.counterfactual.total_return - b.counterfactual.total_return;
+  });
 
   return NextResponse.json({
     cells,
