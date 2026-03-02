@@ -521,6 +521,11 @@ export default function FilterAuditDashboard() {
   return (
     <div className="max-w-5xl mx-auto px-6 py-8">
       {/* Header */}
+      <div className="flex items-center gap-4 mb-2">
+        <a href="/admin" className="text-[11px] font-mono" style={{ color: MUTED }}>← Admin</a>
+        <a href="/admin/filter-impact" className="text-[11px] font-mono" style={{ color: MUTED }}>Filter Impact</a>
+        <a href="/admin/filter-matrix" className="text-[11px] font-mono" style={{ color: MUTED }}>Filter Matrix</a>
+      </div>
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-lg font-mono font-bold" style={{ color: GOLD }}>
