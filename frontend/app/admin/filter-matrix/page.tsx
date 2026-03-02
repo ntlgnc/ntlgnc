@@ -170,11 +170,7 @@ function HalfGrid({ direction, features, getCellMode, getBoardVote, getSR, getRh
               const hasSR = sr !== null && sr !== undefined;
               const rhoData = getRho(feat.key, bi, direction);
               const rho = rhoData?.rho;
-              const rhoColor = rho === null || rho === undefined ? "rgba(239,68,68,0.5)"
-                : rho >= 0.8 ? "rgba(34,197,94,0.7)"
-                : rho >= 0.4 ? "rgba(134,239,172,0.6)"
-                : rho >= 0 ? "rgba(234,179,8,0.6)"
-                : "rgba(239,68,68,0.6)";
+              const rhoColor = "rgba(255,255,255,0.7)";
               let borderStyle: string, bgStyle: string, textColor: string, shadow = "none";
 
               if (mode === "locked_block") {
@@ -358,11 +354,7 @@ export default function FilterMatrixPage() {
     const hasSR = sr !== null && sr !== undefined;
     const rhoData = getRho(feature, bucketIndex, direction);
     const rhoVal = rhoData?.rho;
-    const cellRhoColor = rhoVal === null || rhoVal === undefined ? "rgba(239,68,68,0.5)"
-      : rhoVal >= 0.8 ? "rgba(34,197,94,0.7)"
-      : rhoVal >= 0.4 ? "rgba(134,239,172,0.6)"
-      : rhoVal >= 0 ? "rgba(234,179,8,0.6)"
-      : "rgba(239,68,68,0.6)";
+    const cellRhoColor = "rgba(255,255,255,0.7)";
     let borderStyle: string, bgStyle: string, textColor: string, shadow = "none";
 
     if (mode === "locked_block") {
