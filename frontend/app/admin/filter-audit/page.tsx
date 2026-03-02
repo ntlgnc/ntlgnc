@@ -36,6 +36,8 @@ type FilterSeries = {
 
 type MatrixCell = {
   strategy_id: string;
+  strategy_name: string;
+  bar_minutes: number | null;
   feature_key: string;
   bucket_label: string;
   direction: string;
@@ -49,6 +51,8 @@ type MatrixCell = {
 type CoinGateEntry = {
   symbol: string;
   strategy_id: string;
+  strategy_name: string;
+  bar_minutes: number | null;
   recent_win_rate: number | null;
   signals_blocked: number;
   counterfactual: { total_return: number; avg_return: number; win_rate: number };
@@ -77,6 +81,13 @@ type Summary = {
 };
 
 type Tab = "all" | "board" | "matrix" | "coin_gate";
+
+function tfLabel(barMinutes: number | null): string {
+  if (!barMinutes) return "?";
+  if (barMinutes >= 1440) return "1d";
+  if (barMinutes >= 60) return "1h";
+  return "1m";
+}
 
 // ── Sub-components ──
 
@@ -273,11 +284,18 @@ function MatrixLockCard({ data }: { data: MatrixCell }) {
           >
             {data.bucket_label}
           </span>
+          <span
+            className="ml-2 text-[10px] font-mono px-1.5 py-0.5 rounded font-bold"
+            style={{ background: "rgba(212,168,67,0.1)", color: GOLD, border: `1px solid ${GOLD}30` }}
+          >
+            {tfLabel(data.bar_minutes)}
+          </span>
           <SourceBadge source={data.source} />
         </div>
         <VerdictBadge verdict={data.verdict} />
       </div>
       <div className="flex gap-4 mb-3 text-[10px] font-mono" style={{ color: MUTED }}>
+        <span>Strategy: <span style={{ color: "rgba(255,255,255,0.7)" }}>{data.strategy_name}</span></span>
         <span>Direction: <span style={{ color: "rgba(255,255,255,0.7)" }}>{data.direction}</span></span>
         <span>Mode: <span style={{ color: borderColor }}>{data.mode.replace("_", " ").toUpperCase()}</span></span>
         <span>Blocked: <span style={{ color: "rgba(255,255,255,0.7)" }}>{data.signals_blocked}</span></span>
@@ -317,11 +335,18 @@ function CoinGateCard({ data }: { data: CoinGateEntry }) {
           <span className="text-[13px] font-mono font-bold text-white">
             {data.symbol}
           </span>
+          <span
+            className="ml-2 text-[10px] font-mono px-1.5 py-0.5 rounded font-bold"
+            style={{ background: "rgba(212,168,67,0.1)", color: GOLD, border: `1px solid ${GOLD}30` }}
+          >
+            {tfLabel(data.bar_minutes)}
+          </span>
           <SourceBadge source="coin_gate" />
         </div>
         <VerdictBadge verdict={data.verdict} />
       </div>
       <div className="flex gap-4 mb-3 text-[10px] font-mono" style={{ color: MUTED }}>
+        <span>Strategy: <span style={{ color: "rgba(255,255,255,0.7)" }}>{data.strategy_name}</span></span>
         <span>
           Trailing WR:{" "}
           <span style={{ color: data.recent_win_rate !== null && data.recent_win_rate < 35 ? RED : "rgba(255,255,255,0.7)" }}>

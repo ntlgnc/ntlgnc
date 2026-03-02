@@ -482,10 +482,14 @@ async function handleMatrixLocks(client: any, hours: number) {
   } catch {}
 
   const { rows: stratRows } = await client.query(
-    `SELECT id, "barMinutes" FROM "FracmapStrategy"`
+    `SELECT id, name, "barMinutes" FROM "FracmapStrategy"`
   );
   const strategyMap: Record<string, number> = {};
-  for (const s of stratRows) strategyMap[s.id] = s.barMinutes;
+  const strategyNames: Record<string, string> = {};
+  for (const s of stratRows) {
+    strategyMap[s.id] = s.barMinutes;
+    strategyNames[s.id] = s.name;
+  }
 
   // Get unattributed filtered signals
   const { rows: signals } = await client.query(
@@ -523,6 +527,8 @@ async function handleMatrixLocks(client: any, hours: number) {
       cellMap[cellKey] = {
         cell: {
           strategy_id: sig.strategyId,
+          strategy_name: strategyNames[sig.strategyId] || sig.strategyId,
+          bar_minutes: strategyMap[sig.strategyId] || null,
           feature_key: attrib.feature_key,
           bucket_label: attrib.bucket_label,
           direction: attrib.direction,
@@ -602,10 +608,14 @@ async function handleCoinGate(client: any, hours: number) {
   } catch {}
 
   const { rows: stratRows } = await client.query(
-    `SELECT id, "barMinutes" FROM "FracmapStrategy"`
+    `SELECT id, name, "barMinutes" FROM "FracmapStrategy"`
   );
   const strategyMap: Record<string, number> = {};
-  for (const s of stratRows) strategyMap[s.id] = s.barMinutes;
+  const strategyNames: Record<string, string> = {};
+  for (const s of stratRows) {
+    strategyMap[s.id] = s.barMinutes;
+    strategyNames[s.id] = s.name;
+  }
 
   // Get unattributed filtered signals
   const { rows: signals } = await client.query(
@@ -704,6 +714,8 @@ async function handleCoinGate(client: any, hours: number) {
     coins.push({
       symbol,
       strategy_id: strategyId,
+      strategy_name: strategyNames[strategyId] || strategyId,
+      bar_minutes: strategyMap[strategyId] || null,
       recent_win_rate: stats?.recentWinRate ?? null,
       signals_blocked: sigs.length,
       counterfactual: {
