@@ -10,6 +10,7 @@ const pages = [
   { href: "/admin/filter-audit", label: "Filter Audit" },
   { href: "/admin/filter-impact", label: "Filter Impact" },
   { href: "/admin/filter-matrix", label: "Filter Matrix" },
+  { href: "/admin/hedged-backtest", label: "Hedged Backtest" },
 ];
 
 export default function AdminNav() {
