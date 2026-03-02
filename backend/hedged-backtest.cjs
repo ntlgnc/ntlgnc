@@ -245,15 +245,46 @@ function buildPairs(allSignals, maxGapBars, coinBars, exclusive) {
 // HEDGED METRICS
 // ═══════════════════════════════════════════════════════════════
 
+// Approximate two-tailed p-value from t-statistic (good enough for t > 1)
+function tToP(t, df) {
+  if (df < 1) return 1;
+  const x = df / (df + t * t);
+  // Regularized incomplete beta approximation (simple series)
+  let p;
+  if (Math.abs(t) < 0.001) return 1;
+  // Use normal approximation for large df
+  if (df > 100) {
+    const z = Math.abs(t);
+    p = Math.exp(-0.5 * z * z) / Math.sqrt(2 * Math.PI) * (1 / z);
+    return Math.min(1, 2 * p);
+  }
+  // Simple approximation: p ≈ 2 * (1 - Φ(|t| * sqrt(df/(df-2))))
+  const adj = Math.abs(t) * Math.sqrt(df / Math.max(1, df - 2));
+  p = 2 * (1 - normalCDF(adj));
+  return Math.max(0, Math.min(1, p));
+}
+
+function normalCDF(x) {
+  const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741, a4 = -1.453152027, a5 = 1.061405429;
+  const p = 0.3275911;
+  const sign = x < 0 ? -1 : 1;
+  x = Math.abs(x) / Math.sqrt(2);
+  const t = 1.0 / (1.0 + p * x);
+  const y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
+  return 0.5 * (1.0 + sign * y);
+}
+
 function calcHedgedMetrics(pairs) {
-  if (pairs.length === 0) return { sharpe: 0, winRate: 0, profitFactor: 0, totalRet: 0, avgHold: 0, t1Count: 0, t2Count: 0 };
+  if (pairs.length === 0) return { sharpe: 0, winRate: 0, profitFactor: 0, totalRet: 0, avgHold: 0, t1Count: 0, t2Count: 0, avgRetBps: 0, tStat: 0, pValue: 1, sharpeLo95: 0 };
 
   const pairRets = pairs.map(p => p.pairReturn);
-  const meanRet = pairRets.reduce((s, r) => s + r, 0) / pairRets.length;
-  const stdRet = Math.sqrt(pairRets.reduce((s, r) => s + (r - meanRet) ** 2, 0) / pairRets.length);
-  const winRate = pairRets.filter(r => r > 0).length / pairRets.length * 100;
+  const n = pairRets.length;
+  const meanRet = pairRets.reduce((s, r) => s + r, 0) / n;
+  const variance = pairRets.reduce((s, r) => s + (r - meanRet) ** 2, 0) / n;
+  const stdRet = Math.sqrt(variance);
+  const winRate = pairRets.filter(r => r > 0).length / n * 100;
   const totalRet = pairRets.reduce((s, r) => s + r, 0);
-  const avgHold = pairs.reduce((s, p) => s + p.pairDuration, 0) / pairs.length;
+  const avgHold = pairs.reduce((s, p) => s + p.pairDuration, 0) / n;
   const sharpe = stdRet > 0 ? (meanRet / stdRet) * Math.sqrt(525600 / Math.max(1, avgHold * BAR_MINUTES)) : 0;
   const grossWin = pairRets.filter(r => r > 0).reduce((s, r) => s + r, 0);
   const grossLoss = Math.abs(pairRets.filter(r => r < 0).reduce((s, r) => s + r, 0));
@@ -261,7 +292,41 @@ function calcHedgedMetrics(pairs) {
   const t1Count = pairs.filter(p => p.tier === 1).length;
   const t2Count = pairs.filter(p => p.tier === 2).length;
 
-  return { sharpe: +sharpe.toFixed(3), winRate: +winRate.toFixed(1), profitFactor: +profitFactor.toFixed(3), totalRet: +totalRet.toFixed(3), avgHold: +avgHold.toFixed(1), t1Count, t2Count };
+  // Average return in basis points (1 bps = 0.01%)
+  const avgRetBps = Math.round(meanRet * 100); // meanRet is in %, * 100 = bps
+
+  // t-statistic: is mean return significantly different from zero?
+  const sampleStd = n > 1 ? Math.sqrt(pairRets.reduce((s, r) => s + (r - meanRet) ** 2, 0) / (n - 1)) : 0;
+  const tStat = sampleStd > 0 ? (meanRet / (sampleStd / Math.sqrt(n))) : 0;
+  const pValue = tToP(tStat, n - 1);
+
+  // Bootstrap 95% CI on Sharpe (1000 resamples)
+  let sharpeLo95 = 0;
+  if (n >= 10) {
+    const bootstrapSharpes = [];
+    for (let b = 0; b < 1000; b++) {
+      let bSum = 0, bSum2 = 0, bHold = 0;
+      for (let j = 0; j < n; j++) {
+        const idx = Math.floor(Math.random() * n);
+        bSum += pairRets[idx];
+        bSum2 += pairRets[idx] ** 2;
+        bHold += pairs[idx].pairDuration;
+      }
+      const bMean = bSum / n;
+      const bStd = Math.sqrt(Math.max(0, bSum2 / n - bMean * bMean));
+      const bAvgHold = bHold / n;
+      const bSharpe = bStd > 0 ? (bMean / bStd) * Math.sqrt(525600 / Math.max(1, bAvgHold * BAR_MINUTES)) : 0;
+      bootstrapSharpes.push(bSharpe);
+    }
+    bootstrapSharpes.sort((a, b) => a - b);
+    sharpeLo95 = bootstrapSharpes[Math.floor(0.05 * bootstrapSharpes.length)];
+  }
+
+  return {
+    sharpe: +sharpe.toFixed(3), winRate: +winRate.toFixed(1), profitFactor: +profitFactor.toFixed(3),
+    totalRet: +totalRet.toFixed(3), avgHold: +avgHold.toFixed(1), t1Count, t2Count,
+    avgRetBps, tStat: +tStat.toFixed(2), pValue: +pValue.toFixed(4), sharpeLo95: +sharpeLo95.toFixed(3),
+  };
 }
 
 // Unhedged baseline from raw signals
@@ -317,10 +382,17 @@ function getTopPairs(pairs, limit = 10) {
       oos_total_ret FLOAT, oos_trade_count INT, oos_avg_hold FLOAT,
       oos_t1_count INT, oos_t2_count INT, oos_unmatched INT,
       oos_unhedged_sharpe FLOAT, oos_unhedged_wr FLOAT,
+      oos_avg_ret_bps INT, oos_t_stat FLOAT, oos_p_value FLOAT, oos_sharpe_lo95 FLOAT,
+      is_avg_ret_bps INT, is_t_stat FLOAT, is_p_value FLOAT, is_sharpe_lo95 FLOAT,
       top_pairs JSONB, oos_pairs JSONB,
       UNIQUE(bar_minutes, cycle_min, cycle_max, pair_mode, max_gap)
     )
   `);
+
+  // Add stat columns if table already exists
+  for (const col of ['oos_avg_ret_bps INT', 'oos_t_stat FLOAT', 'oos_p_value FLOAT', 'oos_sharpe_lo95 FLOAT', 'is_avg_ret_bps INT', 'is_t_stat FLOAT', 'is_p_value FLOAT', 'is_sharpe_lo95 FLOAT']) {
+    try { await client.query(`ALTER TABLE hedged_backtest ADD COLUMN IF NOT EXISTS ${col}`); } catch {}
+  }
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS hedged_backtest_coins (
@@ -475,18 +547,27 @@ function getTopPairs(pairs, limit = 10) {
             bar_minutes, cycle_min, cycle_max, pair_mode, max_gap, split_pct, coins_used,
             is_sharpe, is_win_rate, is_profit_factor, is_total_ret, is_trade_count, is_avg_hold, is_t1_count, is_t2_count, is_unmatched,
             oos_sharpe, oos_win_rate, oos_profit_factor, oos_total_ret, oos_trade_count, oos_avg_hold, oos_t1_count, oos_t2_count, oos_unmatched,
-            oos_unhedged_sharpe, oos_unhedged_wr, top_pairs
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
+            oos_unhedged_sharpe, oos_unhedged_wr,
+            oos_avg_ret_bps, oos_t_stat, oos_p_value, oos_sharpe_lo95,
+            is_avg_ret_bps, is_t_stat, is_p_value, is_sharpe_lo95,
+            top_pairs
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36)
           ON CONFLICT (bar_minutes, cycle_min, cycle_max, pair_mode, max_gap)
           DO UPDATE SET computed_at=now(), coins_used=$7,
             is_sharpe=$8, is_win_rate=$9, is_profit_factor=$10, is_total_ret=$11, is_trade_count=$12, is_avg_hold=$13, is_t1_count=$14, is_t2_count=$15, is_unmatched=$16,
             oos_sharpe=$17, oos_win_rate=$18, oos_profit_factor=$19, oos_total_ret=$20, oos_trade_count=$21, oos_avg_hold=$22, oos_t1_count=$23, oos_t2_count=$24, oos_unmatched=$25,
-            oos_unhedged_sharpe=$26, oos_unhedged_wr=$27, top_pairs=$28
+            oos_unhedged_sharpe=$26, oos_unhedged_wr=$27,
+            oos_avg_ret_bps=$28, oos_t_stat=$29, oos_p_value=$30, oos_sharpe_lo95=$31,
+            is_avg_ret_bps=$32, is_t_stat=$33, is_p_value=$34, is_sharpe_lo95=$35,
+            top_pairs=$36
         `, [
           BAR_MINUTES, cycleMin, cycleMax, mode, maxGap, SPLIT_PCT, coinsUsed,
           isMetrics.sharpe, isMetrics.winRate, isMetrics.profitFactor, isMetrics.totalRet, isResult.pairs.length, isMetrics.avgHold, isMetrics.t1Count, isMetrics.t2Count, isResult.unmatched.length,
           oosMetrics.sharpe, oosMetrics.winRate, oosMetrics.profitFactor, oosMetrics.totalRet, oosResult.pairs.length, oosMetrics.avgHold, oosMetrics.t1Count, oosMetrics.t2Count, oosResult.unmatched.length,
-          oosBaseline.sharpe, oosBaseline.winRate, JSON.stringify(topPairs),
+          oosBaseline.sharpe, oosBaseline.winRate,
+          oosMetrics.avgRetBps, oosMetrics.tStat, oosMetrics.pValue, oosMetrics.sharpeLo95,
+          isMetrics.avgRetBps, isMetrics.tStat, isMetrics.pValue, isMetrics.sharpeLo95,
+          JSON.stringify(topPairs),
         ]);
 
         // Track for summary
@@ -495,6 +576,7 @@ function getTopPairs(pairs, limit = 10) {
             cycleMin, cycleMax, mode, maxGap,
             oosSharpe: oosMetrics.sharpe, isSharpe: isMetrics.sharpe,
             oosWR: oosMetrics.winRate, oosPairs: oosResult.pairs.length,
+            oosBps: oosMetrics.avgRetBps, oosTstat: oosMetrics.tStat, oosPval: oosMetrics.pValue, oosSRlo95: oosMetrics.sharpeLo95,
             oosPF: oosMetrics.profitFactor, oosRet: oosMetrics.totalRet,
           });
         }
@@ -566,19 +648,21 @@ function getTopPairs(pairs, limit = 10) {
   console.log('  ═══════════════════════════════════════════════════════════════\n');
 
   const top20 = topResults.slice(0, 20);
-  console.log('  Cycles   | Mode      | Gap | OOS SR | IS SR  | OOS WR | Pairs | PF    | Ret%');
-  console.log('  ' + '-'.repeat(85));
+  console.log('  Cycles   | Mode      | Gap | OOS SR | SR 95%CI | IS SR  | Bps  | t-stat | p-val  | WR%   | Pairs');
+  console.log('  ' + '-'.repeat(105));
   for (const r of top20) {
     console.log(
       '  ' + `C${r.cycleMin}-${r.cycleMax}`.padEnd(9) +
       '| ' + r.mode.padEnd(10) +
       '| ' + String(r.maxGap).padEnd(4) +
       '| ' + r.oosSharpe.toFixed(2).padStart(6) +
+      ' | ' + r.oosSRlo95.toFixed(2).padStart(8) +
       ' | ' + r.isSharpe.toFixed(2).padStart(6) +
+      ' | ' + String(r.oosBps).padStart(4) +
+      ' | ' + r.oosTstat.toFixed(1).padStart(6) +
+      ' | ' + (r.oosPval < 0.001 ? '<0.001' : r.oosPval.toFixed(3)).padStart(6) +
       ' | ' + r.oosWR.toFixed(1).padStart(5) + '%' +
-      ' | ' + String(r.oosPairs).padStart(5) +
-      ' | ' + r.oosPF.toFixed(2).padStart(5) +
-      ' | ' + (r.oosRet >= 0 ? '+' : '') + r.oosRet.toFixed(1)
+      ' | ' + String(r.oosPairs).padStart(5)
     );
   }
 

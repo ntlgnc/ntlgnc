@@ -32,6 +32,14 @@ type Result = {
   oos_unmatched: number;
   oos_unhedged_sharpe: number;
   oos_unhedged_wr: number;
+  oos_avg_ret_bps: number;
+  oos_t_stat: number;
+  oos_p_value: number;
+  oos_sharpe_lo95: number;
+  is_avg_ret_bps: number;
+  is_t_stat: number;
+  is_p_value: number;
+  is_sharpe_lo95: number;
   top_pairs: any[];
 };
 
@@ -46,25 +54,38 @@ type CoinRow = {
   best_cycle: number | null;
 };
 
-type Metric = "oos_sharpe" | "oos_win_rate" | "oos_profit_factor" | "oos_total_ret";
+type Metric = "oos_sharpe" | "oos_win_rate" | "oos_profit_factor" | "oos_avg_ret_bps" | "oos_t_stat" | "oos_sharpe_lo95";
 
 function metricLabel(m: Metric): string {
-  return { oos_sharpe: "OOS Sharpe", oos_win_rate: "OOS Win Rate", oos_profit_factor: "OOS PF", oos_total_ret: "OOS Return" }[m];
+  return {
+    oos_sharpe: "OOS Sharpe", oos_win_rate: "OOS Win Rate", oos_profit_factor: "OOS PF",
+    oos_avg_ret_bps: "Avg Ret (bps)", oos_t_stat: "t-stat", oos_sharpe_lo95: "SR 95% CI Low",
+  }[m];
 }
 
 function fmtMetric(v: number, m: Metric): string {
   if (m === "oos_win_rate") return v.toFixed(1) + "%";
-  if (m === "oos_total_ret") return (v >= 0 ? "+" : "") + v.toFixed(1) + "%";
+  if (m === "oos_avg_ret_bps") return (v >= 0 ? "+" : "") + v.toFixed(0);
+  if (m === "oos_t_stat") return v.toFixed(1);
   return v.toFixed(2);
+}
+
+function pValueBadge(p: number): string {
+  if (p < 0.001) return "***";
+  if (p < 0.01) return "**";
+  if (p < 0.05) return "*";
+  return "";
 }
 
 // ── Heatmap cell color ──
 function heatColor(value: number, metric: Metric): string {
   let norm: number;
-  if (metric === "oos_sharpe") norm = Math.min(1, Math.max(0, (value + 1) / 4)); // -1..3 → 0..1
-  else if (metric === "oos_win_rate") norm = Math.min(1, Math.max(0, (value - 30) / 40)); // 30-70
-  else if (metric === "oos_profit_factor") norm = Math.min(1, Math.max(0, (value - 0.5) / 2)); // 0.5-2.5
-  else norm = Math.min(1, Math.max(0, (value + 20) / 60)); // -20..40
+  if (metric === "oos_sharpe" || metric === "oos_sharpe_lo95") norm = Math.min(1, Math.max(0, (value + 1) / 4));
+  else if (metric === "oos_win_rate") norm = Math.min(1, Math.max(0, (value - 30) / 40));
+  else if (metric === "oos_profit_factor") norm = Math.min(1, Math.max(0, (value - 0.5) / 2));
+  else if (metric === "oos_avg_ret_bps") norm = Math.min(1, Math.max(0, (value + 50) / 200)); // -50..150 bps
+  else if (metric === "oos_t_stat") norm = Math.min(1, Math.max(0, (value + 2) / 10)); // -2..8
+  else norm = Math.min(1, Math.max(0, (value + 20) / 60));
 
   if (norm > 0.7) return `rgba(34,197,94,${0.15 + norm * 0.35})`;
   if (norm > 0.45) return `rgba(234,179,8,${0.1 + norm * 0.2})`;
@@ -126,7 +147,7 @@ export default function HedgedBacktestDashboard() {
   // Per-coin data for best config
   const bestCoins = best ? coins.filter((c) => c.backtest_id === best.id).sort((a, b) => b.oos_signals - a.oos_signals) : [];
 
-  const metrics: Metric[] = ["oos_sharpe", "oos_win_rate", "oos_profit_factor", "oos_total_ret"];
+  const metrics: Metric[] = ["oos_sharpe", "oos_sharpe_lo95", "oos_avg_ret_bps", "oos_t_stat", "oos_win_rate", "oos_profit_factor"];
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-8">
@@ -383,12 +404,13 @@ export default function HedgedBacktestDashboard() {
                     <th className="text-left py-2 px-2">Mode</th>
                     <th className="text-center py-2 px-2">Gap</th>
                     <th className="text-right py-2 px-2">OOS SR</th>
+                    <th className="text-right py-2 px-2">SR 95%lo</th>
                     <th className="text-right py-2 px-2">IS SR</th>
+                    <th className="text-right py-2 px-2">Bps</th>
+                    <th className="text-right py-2 px-2">t-stat</th>
+                    <th className="text-right py-2 px-2">p-val</th>
                     <th className="text-right py-2 px-2">WR%</th>
-                    <th className="text-right py-2 px-2">PF</th>
                     <th className="text-right py-2 px-2">Pairs</th>
-                    <th className="text-right py-2 px-2">T1/T2</th>
-                    <th className="text-right py-2 px-2">Ret%</th>
                     <th className="text-right py-2 px-2">Coins</th>
                   </tr>
                 </thead>
@@ -411,18 +433,22 @@ export default function HedgedBacktestDashboard() {
                       <td className="py-1.5 px-2 text-right font-bold" style={{ color: r.oos_sharpe > 0 ? GREEN : RED }}>
                         {r.oos_sharpe.toFixed(2)}
                       </td>
+                      <td className="py-1.5 px-2 text-right" style={{ color: (r.oos_sharpe_lo95 ?? 0) > 0 ? GREEN : RED }}>
+                        {(r.oos_sharpe_lo95 ?? 0).toFixed(2)}
+                      </td>
                       <td className="py-1.5 px-2 text-right" style={{ color: r.is_sharpe > 0 ? GREEN : RED }}>
                         {r.is_sharpe.toFixed(2)}
                       </td>
+                      <td className="py-1.5 px-2 text-right font-bold" style={{ color: (r.oos_avg_ret_bps ?? 0) > 0 ? GREEN : RED }}>
+                        {(r.oos_avg_ret_bps ?? 0) >= 0 ? "+" : ""}{r.oos_avg_ret_bps ?? 0}
+                      </td>
+                      <td className="py-1.5 px-2 text-right">{(r.oos_t_stat ?? 0).toFixed(1)}</td>
+                      <td className="py-1.5 px-2 text-right" style={{ color: (r.oos_p_value ?? 1) < 0.05 ? GREEN : MUTED }}>
+                        {(r.oos_p_value ?? 1) < 0.001 ? "<.001" : (r.oos_p_value ?? 1).toFixed(3)}
+                        {pValueBadge(r.oos_p_value ?? 1)}
+                      </td>
                       <td className="py-1.5 px-2 text-right">{r.oos_win_rate.toFixed(1)}%</td>
-                      <td className="py-1.5 px-2 text-right">{r.oos_profit_factor.toFixed(2)}</td>
                       <td className="py-1.5 px-2 text-right">{r.oos_trade_count}</td>
-                      <td className="py-1.5 px-2 text-right" style={{ color: MUTED }}>
-                        {r.oos_t1_count}/{r.oos_t2_count}
-                      </td>
-                      <td className="py-1.5 px-2 text-right" style={{ color: r.oos_total_ret > 0 ? GREEN : RED }}>
-                        {r.oos_total_ret >= 0 ? "+" : ""}{r.oos_total_ret.toFixed(1)}%
-                      </td>
                       <td className="py-1.5 px-2 text-right" style={{ color: MUTED }}>{r.coins_used}</td>
                     </tr>
                   ))}
