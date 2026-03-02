@@ -208,8 +208,8 @@ function HalfGrid({ direction, features, getCellMode, getBoardVote, getSR, getRh
                   ) : (
                     <span className="text-[10px]" style={{ color: textColor }}>–</span>
                   )}
-                  <div className="text-[7px] font-mono font-bold absolute bottom-0.5 left-1 right-1" style={{ color: rhoColor }}>
-                    {rho !== null && rho !== undefined ? `ρ${rho.toFixed(1)}` : "no ρ"}
+                  <div className="text-[9px] font-mono font-black absolute bottom-0.5 left-1 right-1" style={{ color: rhoColor }}>
+                    {rho !== null && rho !== undefined ? `ρ${rho.toFixed(1)}` : "—"}
                   </div>
                   {mode !== "auto" && <span className="absolute top-0.5 right-0.5 text-[6px]">🔒</span>}
                   {mode === "auto" && boardBlocked && <span className="absolute top-0.5 right-0.5 text-[6px]">🤖</span>}
@@ -393,8 +393,8 @@ export default function FilterMatrixPage() {
         ) : (
           <span className="text-[10px]" style={{ color: textColor }}>–</span>
         )}
-        <div className="text-[7px] font-mono font-bold absolute bottom-0.5 left-1 right-1" style={{ color: cellRhoColor }}>
-          {rhoVal !== null && rhoVal !== undefined ? `ρ${rhoVal.toFixed(1)}` : "no ρ"}
+        <div className="text-[9px] font-mono font-black absolute bottom-0.5 left-1 right-1" style={{ color: cellRhoColor }}>
+          {rhoVal !== null && rhoVal !== undefined ? `ρ${rhoVal.toFixed(1)}` : "—"}
         </div>
         {mode !== "auto" && <span className="absolute top-0.5 right-1 text-[7px]" style={{ color: mode === "locked_block" ? RED : GREEN }}>🔒</span>}
         {mode === "auto" && boardBlocked && <span className="absolute top-0.5 right-1 text-[7px]">🤖</span>}
