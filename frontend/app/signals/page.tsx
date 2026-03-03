@@ -161,7 +161,7 @@ function MiniEquityCurve({ label, signals, color, prices, filters, timeWindow }:
   // This matches what the user sees: if open positions make the portfolio positive, chart is green
   const curveReturn = cumReturn + unrealisedPnL;
 
-  const W = 300, H = 80;
+  const W = 300, H = 130;
 
   // Time-based x positions
   const timePositions = useMemo(() => {
@@ -254,19 +254,43 @@ function MiniEquityCurve({ label, signals, color, prices, filters, timeWindow }:
       <div className="flex">
         {/* Chart - left side */}
         <div className="flex-1 p-3 pr-0 flex items-stretch">
-          {displayValues.length > 1 ? (
-            <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-full" style={{ minHeight: 120 }}>
+          {displayValues.length > 1 ? (() => {
+            const minV = Math.min(0, ...windowValues);
+            const maxV = Math.max(0, ...windowValues);
+            const range = maxV - minV || 1;
+            const zeroY = H - ((0 - minV) / range) * (H - 8) - 4;
+            const lineColor = curveReturn >= 0 ? GREEN : RED;
+            const endVal = windowValues[windowValues.length - 1] || 0;
+            return (
+            <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-full" style={{ minHeight: 150 }}>
               <defs>
                 <linearGradient id={`grad-${label}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={curveReturn >= 0 ? GREEN : RED} stopOpacity="0.15" />
-                  <stop offset="100%" stopColor={curveReturn >= 0 ? GREEN : RED} stopOpacity="0.01" />
+                  <stop offset="0%" stopColor={lineColor} stopOpacity="0.2" />
+                  <stop offset="100%" stopColor={lineColor} stopOpacity="0.02" />
                 </linearGradient>
               </defs>
+              {/* Zero line */}
+              <line x1="0" y1={zeroY} x2={W} y2={zeroY} stroke="rgba(255,255,255,0.08)" strokeWidth="1" strokeDasharray="4 4" />
               <path d={areaD} fill={`url(#grad-${label})`} />
-              <path d={curveD} fill="none" stroke={curveReturn >= 0 ? GREEN : RED} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+              <path d={curveD} fill="none" stroke={lineColor} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+              {/* End dot */}
+              {windowValues.length > 0 && (
+                <circle
+                  cx={timePositions[timePositions.length - 1]}
+                  cy={H - ((endVal - minV) / range) * (H - 8) - 4}
+                  r="3" fill={lineColor}
+                />
+              )}
+              {/* End value label */}
+              <text
+                x={W - 4} y={12}
+                textAnchor="end" fill={lineColor}
+                fontSize="10" fontFamily="monospace" fontWeight="bold"
+              >{endVal >= 0 ? "+" : ""}{endVal.toFixed(1)}%</text>
             </svg>
-          ) : (
-            <div className="flex items-center justify-center w-full" style={{ minHeight: 120 }}>
+            );
+          })() : (
+            <div className="flex items-center justify-center w-full" style={{ minHeight: 150 }}>
               <span className="text-[10px] font-mono text-white/80">No closed trades</span>
             </div>
           )}
@@ -1349,156 +1373,101 @@ export default function SignalsPage() {
 
       </div>
 
-      {/* ── Signal Table ── */}
-      <div className="rounded-xl overflow-hidden" style={{ border: "1px solid rgba(212,168,67,0.25)" }}>
-        {/* Delayed data strip for free users */}
-        {!isPaid && (
-          <div className="text-center px-3 py-1" style={{
-            background: "rgba(212,168,67,0.12)",
-            borderBottom: "1px solid rgba(212,168,67,0.15)",
-          }}>
-            <Link href="/pricing" className="text-[10px] font-mono font-bold" style={{ color: GOLD }}>
-              {NET_POSITION_DELAY_MINS}m delayed data – Buy a seat for live →
-            </Link>
-          </div>
-        )}
-        <table className="w-full text-[11px]">
-          <thead>
-            <tr className="text-white/85 border-b" style={{ borderColor: "rgba(255,255,255,0.08)" }}>
-              <th className="text-center py-2 px-2 font-mono font-semibold">Time</th>
-              <th className="text-center py-2 px-2 font-mono font-semibold">Coin</th>
-              <th className="text-center py-2 px-2 font-mono font-semibold">Up/Dn</th>
-              <th className="text-center py-2 px-2 font-mono font-semibold">Price</th>
-              <th className="text-center py-2 px-2 font-mono font-semibold">Return</th>
-              <th className="text-center py-2 px-2 font-mono font-semibold">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {paged.length === 0 && (
-              <tr><td colSpan={6} className="py-8 text-center text-white/80 font-mono">No signals match these filters</td></tr>
-            )}
-            {paged.map(sig => {
-              const isL = sig.direction === "LONG";
-              const won = (sig.returnPct || 0) > 0;
-              const unrealised = getUnrealisedReturn(sig);
-              const isExpanded = expandedId === sig.id;
-              const canExpand = true;
-              const periodicity = getPeriodicity(sig);
+      {/* ── Signal Cards ── */}
+      {!isPaid && (
+        <div className="text-center px-3 py-1.5 mb-3 rounded-lg" style={{
+          background: "rgba(212,168,67,0.06)",
+          border: "1px solid rgba(212,168,67,0.15)",
+        }}>
+          <Link href="/pricing" className="text-[10px] font-mono font-bold" style={{ color: GOLD }}>
+            {NET_POSITION_DELAY_MINS}m delayed data – Buy a seat for live →
+          </Link>
+        </div>
+      )}
+      {paged.length === 0 && (
+        <div className="py-12 text-center font-mono text-sm" style={{ color: "rgba(255,255,255,0.4)" }}>No signals match these filters</div>
+      )}
+      <div className="space-y-1.5">
+        {paged.map(sig => {
+          const isL = sig.direction === "LONG";
+          const unrealised = getUnrealisedReturn(sig);
+          const isExpanded = expandedId === sig.id;
+          const periodicity = getPeriodicity(sig);
+          const barMins = sig.barMinutes || (periodicity === "1m" ? 1 : periodicity === "1h" ? 60 : 1440);
+          const holdMs = (sig.holdBars || 10) * barMins * 60_000;
+          const expectedClose = new Date(sig.createdAt).getTime() + holdMs;
+          const remaining = expectedClose - now;
+          const ret = sig.status === "closed" ? (sig.returnPct || 0) : unrealised;
+          const retColor = ret !== null && ret !== undefined ? (ret > 0 ? GREEN : ret < 0 ? RED : "rgba(255,255,255,0.5)") : "rgba(255,255,255,0.3)";
+          const borderColor = sig.status === "open" ? "rgba(34,197,94,0.12)" : ret !== null && ret !== undefined ? (ret > 0 ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)") : "rgba(255,255,255,0.06)";
+          const tfColor = periodicity === "1m" ? "#3b82f6" : periodicity === "1h" ? "#a78bfa" : GOLD;
 
-              // Expected close countdown
-              const barMins = sig.barMinutes || (periodicity === "1m" ? 1 : periodicity === "1h" ? 60 : 1440);
-              const holdMs = (sig.holdBars || 10) * barMins * 60_000;
-              const expectedClose = new Date(sig.createdAt).getTime() + holdMs;
-              const remaining = expectedClose - now;
+          return (
+            <React.Fragment key={sig.id}>
+              <div
+                className="rounded-xl p-3 flex items-center gap-3 cursor-pointer hover:brightness-110 transition-all"
+                style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${borderColor}` }}
+                onClick={() => setExpandedId(isExpanded ? null : sig.id)}
+              >
+                {/* Direction badge */}
+                <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0" style={{
+                  background: isL ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)",
+                  color: isL ? GREEN : RED,
+                }}>{isL ? "L" : "S"}</span>
 
-              // Status label for open trades
-              const statusLabel = periodicity === "1m"
-                ? remaining > 0 ? formatDuration(remaining) : "closing…"
-                : periodicity === "1h"
-                ? remaining > 0 ? formatDuration(remaining) : "closing…"
-                : remaining > 0 ? formatDuration(remaining) : "closing…";
+                {/* Coin */}
+                <span className="text-[13px] font-mono font-bold text-white min-w-[60px]">
+                  {sig.symbol?.replace("USDT", "")}
+                </span>
 
-              return (
-                <React.Fragment key={sig.id}>
-                  <>
-                  <tr
-                    className={`border-b ${canExpand ? "cursor-pointer" : ""} hover:bg-white/[0.02] transition-colors`}
-                    style={{ borderColor: isExpanded ? "transparent" : "rgba(255,255,255,0.04)" }}
-                    onClick={() => canExpand && setExpandedId(isExpanded ? null : sig.id)}
-                  >
-                    <td className="py-2 px-2 font-mono tabular-nums text-white/75">
-                      <div className="flex flex-col items-center gap-0.5">
-                        <span className="text-[8px] px-1 py-px rounded font-bold"
-                          style={{
-                            background: periodicity === "1m" ? "rgba(59,130,246,0.1)" :
-                                       periodicity === "1h" ? "rgba(167,139,250,0.1)" :
-                                       "rgba(212,168,67,0.1)",
-                            color: periodicity === "1m" ? "#3b82f6" :
-                                   periodicity === "1h" ? "#a78bfa" :
-                                   GOLD,
-                          }}>
-                          {periodicity.toUpperCase()}
-                        </span>
-                        <span className="text-[11px]">{new Date(sig.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-                      </div>
-                    </td>
-                    <td className="py-2 px-2 font-mono font-bold text-center"
-                      style={{ color: isL ? GREEN : RED }}>
-                      {sig.symbol?.replace("USDT", "")}
-                    </td>
-                    <td className="py-2 px-2 font-mono text-center"
-                      style={{ color: isL ? GREEN : RED }}>
-                      {isL ? "▲ Up" : "▼ Dn"}
-                    </td>
-                    <td className="py-2 px-2 font-mono tabular-nums text-center">
-                      <div className="flex flex-col gap-0.5 items-center">
-                        <div className="flex items-baseline gap-1">
-                          <span className="text-[8px] text-white/45">in</span>
-                          <span style={{ color: "rgba(255,255,255,0.7)" }}>{sig.entryPrice?.toFixed(sig.entryPrice > 100 ? 2 : 4)}</span>
-                        </div>
-                        <div className="flex items-baseline gap-1">
-                          <span className="text-[8px] text-white/45">{sig.status === "open" ? "now" : "out"}</span>
-                          <span style={{ color: "rgba(255,255,255,0.65)" }}>
-                            {(() => {
-                              // Use exitPrice if available (closed trades with proper data)
-                              const ep = sig.exitPrice;
-                              if (ep) return ep.toFixed(ep > 100 ? 2 : 4);
-                              // Fall back to current price for open trades or closed trades missing exitPrice
-                              const cp = prices[sig.symbol];
-                              if (cp) return cp.toFixed(cp > 100 ? 2 : 4);
-                              return "—";
-                            })()}
-                          </span>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="py-2 px-2 font-mono tabular-nums text-center font-bold" style={{
-                      color: sig.status === "closed"
-                        ? ((sig.returnPct || 0) > 0 ? GREEN : (sig.returnPct || 0) < 0 ? RED : "rgba(255,255,255,0.5)")
-                        : (unrealised !== null ? (unrealised > 0 ? GREEN : unrealised < 0 ? RED : "rgba(255,255,255,0.5)") : "rgba(255,255,255,0.3)")
-                    }}>
-                      {sig.status === "closed"
-                        ? `${(sig.returnPct || 0) > 0 ? "+" : ""}${(sig.returnPct || 0).toFixed(3)}%`
-                        : (unrealised !== null ? `${unrealised > 0 ? "+" : ""}${unrealised.toFixed(3)}%` : "—")
-                      }
-                    </td>
-                    <td className="py-2 px-2 text-center">
-                      {sig.status === "open" ? (
-                          <div className="flex flex-col items-center gap-0.5">
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[8px] font-mono"
-                              style={{ background: "rgba(34,197,94,0.08)", color: GREEN }}>
-                              <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-                              Open
-                            </span>
-                            <span className="text-[8px] font-mono text-white/85">
-                              {statusLabel}
-                            </span>
-                          </div>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[8px] font-mono"
-                          style={{ 
-                            background: "rgba(255,255,255,0.04)", 
-                            color: "rgba(255,255,255,0.5)" 
-                          }}>
-                          Closed
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                  {/* Expandable chart row */}
-                  {isExpanded && (
-                    <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                      <td colSpan={6} className="p-3" style={{ background: "rgba(0,0,0,0.15)" }}>
-                        <SignalChart signalId={sig.id} />
-                      </td>
-                    </tr>
-                  )}
-                  </>
-                </React.Fragment>
-              );
-            })}
-          </tbody>
-        </table>
+                {/* Timeframe badge */}
+                <span className="text-[8px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0" style={{
+                  background: `${tfColor}15`, color: tfColor,
+                }}>{periodicity.toUpperCase()}</span>
+
+                {/* Entry/Exit prices */}
+                <div className="text-[9px] font-mono tabular-nums hidden sm:flex items-center gap-2" style={{ color: "rgba(255,255,255,0.5)" }}>
+                  <span>{sig.entryPrice?.toFixed(sig.entryPrice > 100 ? 2 : 4)}</span>
+                  <span style={{ color: "rgba(255,255,255,0.2)" }}>→</span>
+                  <span>{sig.exitPrice ? sig.exitPrice.toFixed(sig.exitPrice > 100 ? 2 : 4) : (prices[sig.symbol] ? prices[sig.symbol].toFixed(prices[sig.symbol] > 100 ? 2 : 4) : "—")}</span>
+                </div>
+
+                {/* Spacer */}
+                <div className="flex-1" />
+
+                {/* Status */}
+                {sig.status === "open" ? (
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                    <span className="text-[9px] font-mono" style={{ color: GREEN }}>
+                      {remaining > 0 ? formatDuration(remaining) : "closing..."}
+                    </span>
+                  </div>
+                ) : (
+                  <span className="text-[9px] font-mono shrink-0" style={{ color: "rgba(255,255,255,0.3)" }}>
+                    {new Date(sig.closedAt || sig.createdAt).toLocaleDateString()}
+                  </span>
+                )}
+
+                {/* Return */}
+                <div className="text-right min-w-[70px] shrink-0">
+                  <span className="text-[15px] font-mono font-black tabular-nums" style={{ color: retColor }}>
+                    {ret !== null && ret !== undefined
+                      ? `${ret > 0 ? "+" : ""}${ret.toFixed(2)}%`
+                      : "—"}
+                  </span>
+                </div>
+              </div>
+
+              {/* Expanded chart */}
+              {isExpanded && (
+                <div className="rounded-xl p-3 -mt-1" style={{ background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.04)" }}>
+                  <SignalChart signalId={sig.id} />
+                </div>
+              )}
+            </React.Fragment>
+          );
+        })}
       </div>
 
       {/* ── Pagination ── */}
