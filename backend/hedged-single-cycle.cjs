@@ -176,7 +176,7 @@ function buildPairs(allSignals, maxGapBars, coinBars, exclusive) {
       } else { legB_return = B.returnPct * (pairDuration / Math.max(B.holdDuration, 1)); }
       const pairReturn = legA_return + legB_return;
       if (Math.abs(pairReturn) > 100) continue;
-      pairs.push({ tier: gap === 0 ? 1 : 2, pairReturn: +pairReturn.toFixed(3), pairDuration, gapBars: gap });
+      pairs.push({ tier: gap === 0 ? 1 : 2, pairReturn: +pairReturn.toFixed(3), pairDuration, gapBars: gap, entryBar: A.entryIdx });
       if (exclusive) { used.add(ai); used.add(bestBi); }
     }
   }
@@ -198,13 +198,35 @@ function calcMetrics(pairs, barMinutes) {
   const rets = pairs.map(p => p.pairReturn);
   const n = rets.length;
   const mean = rets.reduce((s, r) => s + r, 0) / n;
-  const std = Math.sqrt(rets.reduce((s, r) => s + (r - mean) ** 2, 0) / n);
   const avgHold = pairs.reduce((s, p) => s + p.pairDuration, 0) / n;
-  const sharpe = std > 0 ? (mean / std) * Math.sqrt(525600 / Math.max(1, avgHold * barMinutes)) : 0;
   const winRate = rets.filter(r => r > 0).length / n * 100;
   const grossWin = rets.filter(r => r > 0).reduce((s, r) => s + r, 0);
   const grossLoss = Math.abs(rets.filter(r => r < 0).reduce((s, r) => s + r, 0));
   const pf = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? 999 : 0;
+
+  // Daily-return-based Sharpe (correct annualisation)
+  // Distribute each pair's return evenly across its hold bars, bucket into daily returns
+  const barsPerDay = Math.round(1440 / Math.max(1, barMinutes));
+  const maxBar = pairs.length > 0 ? Math.max(...pairs.map(p => (p.entryBar || 0) + p.pairDuration)) : 0;
+  const nDays = Math.max(1, Math.ceil(maxBar / barsPerDay));
+  const dailyRets = new Float64Array(nDays);
+  for (const p of pairs) {
+    const entry = p.entryBar || 0;
+    const hold = Math.max(1, p.pairDuration);
+    const perBar = p.pairReturn / hold;
+    for (let b = entry; b < entry + hold; b++) {
+      const day = Math.floor(b / barsPerDay);
+      if (day < nDays) dailyRets[day] += perBar;
+    }
+  }
+  let dSum = 0, dSum2 = 0;
+  for (const d of dailyRets) { dSum += d; dSum2 += d * d; }
+  const dMean = dSum / nDays;
+  const dVar = dSum2 / nDays - dMean * dMean;
+  const dStd = Math.sqrt(Math.max(0, dVar));
+  const sharpe = dStd > 0 ? (dMean / dStd) * Math.sqrt(365) : 0;
+
+  // t-stat on per-trade returns (still valid for significance testing)
   const sampleStd = n > 1 ? Math.sqrt(rets.reduce((s, r) => s + (r - mean) ** 2, 0) / (n - 1)) : 0;
   const tStat = sampleStd > 0 ? (mean / (sampleStd / Math.sqrt(n))) : 0;
   const pValue = Math.max(0, Math.min(1, 2 * (1 - normalCDF(Math.abs(tStat)))));
