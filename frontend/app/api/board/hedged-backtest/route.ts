@@ -44,7 +44,16 @@ export async function GET(req: NextRequest) {
       } catch {}
     }
 
-    return NextResponse.json({ results: rows, coins });
+    // Also load single-cycle sweep data
+    let singleCycle: any[] = [];
+    try {
+      const { rows: scRows } = await client.query(
+        `SELECT * FROM hedged_single_cycle ORDER BY bar_minutes, cycle, pair_mode, max_gap`
+      );
+      singleCycle = scRows;
+    } catch {}
+
+    return NextResponse.json({ results: rows, coins, singleCycle });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   } finally {

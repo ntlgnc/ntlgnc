@@ -96,10 +96,13 @@ function heatColor(value: number, metric: Metric): string {
 export default function HedgedBacktestDashboard() {
   const [results, setResults] = useState<Result[]>([]);
   const [coins, setCoins] = useState<CoinRow[]>([]);
+  const [singleCycle, setSingleCycle] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [metric, setMetric] = useState<Metric>("oos_sharpe");
   const [modeFilter, setModeFilter] = useState<string>("exclusive");
   const [gapFilter, setGapFilter] = useState<number>(0);
+  const [scMode, setScMode] = useState<string>("exclusive");
+  const [scGap, setScGap] = useState<number>(0);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -108,6 +111,7 @@ export default function HedgedBacktestDashboard() {
       .then((d) => {
         setResults(d.results || []);
         setCoins(d.coins || []);
+        setSingleCycle(d.singleCycle || []);
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -165,6 +169,105 @@ export default function HedgedBacktestDashboard() {
           </p>
         </div>
       </div>
+
+      {/* ── Single Cycle Sweep Charts ── */}
+      {singleCycle.length > 0 && (() => {
+        const timeframes = [
+          { bm: 1440, label: "1D", color: GOLD, unit: "days" },
+          { bm: 60, label: "1H", color: "#a78bfa", unit: "hours" },
+          { bm: 1, label: "1m", color: "#3b82f6", unit: "mins" },
+        ];
+        const filtered = singleCycle.filter((r: any) => r.pair_mode === scMode && r.max_gap === scGap);
+        const availableTfs = timeframes.filter(tf => filtered.some((r: any) => r.bar_minutes === tf.bm));
+
+        return (
+          <div className="mb-6">
+            <div className="flex items-center gap-4 mb-3">
+              <h3 className="text-[12px] font-mono font-bold" style={{ color: GOLD }}>Single Cycle Sweep — SR by Cycle Length</h3>
+              <div className="flex gap-1">
+                {["exclusive", "reuse"].map(m => (
+                  <button key={m} onClick={() => setScMode(m)} className="px-2 py-0.5 text-[9px] font-mono rounded" style={{
+                    background: scMode === m ? "rgba(212,168,67,0.15)" : "rgba(255,255,255,0.05)",
+                    border: `1px solid ${scMode === m ? "rgba(212,168,67,0.3)" : "rgba(255,255,255,0.08)"}`,
+                    color: scMode === m ? GOLD : MUTED,
+                  }}>{m}</button>
+                ))}
+              </div>
+              <div className="flex gap-1">
+                {[0, 1, 2, 3].map(g => (
+                  <button key={g} onClick={() => setScGap(g)} className="px-2 py-0.5 text-[9px] font-mono rounded" style={{
+                    background: scGap === g ? "rgba(212,168,67,0.15)" : "rgba(255,255,255,0.05)",
+                    border: `1px solid ${scGap === g ? "rgba(212,168,67,0.3)" : "rgba(255,255,255,0.08)"}`,
+                    color: scGap === g ? GOLD : MUTED,
+                  }}>gap={g}</button>
+                ))}
+              </div>
+            </div>
+            <div className="flex gap-3 flex-wrap">
+              {availableTfs.map(tf => {
+                const data = filtered.filter((r: any) => r.bar_minutes === tf.bm && r.oos_trade_count >= 3).sort((a: any, b: any) => a.cycle - b.cycle);
+                if (data.length < 2) return null;
+                const maxSR = Math.max(1, ...data.map((r: any) => Math.abs(r.oos_sharpe)));
+                const cW = 400, cH = 140, pad = 30;
+                const chartW = cW - pad * 2;
+                const chartH = cH - 20;
+                const minCyc = data[0].cycle;
+                const maxCyc = data[data.length - 1].cycle;
+                const cycRange = maxCyc - minCyc || 1;
+                const zeroY = 10 + chartH / 2;
+
+                // Find peak
+                const peak = data.reduce((best: any, r: any) => r.oos_sharpe > (best?.oos_sharpe ?? -Infinity) ? r : best, null);
+
+                const points = data.map((r: any) => {
+                  const x = pad + ((r.cycle - minCyc) / cycRange) * chartW;
+                  const y = 10 + chartH / 2 - (r.oos_sharpe / maxSR) * (chartH / 2);
+                  return { x, y, r };
+                });
+                const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+                const fillPath = `${linePath} L${points[points.length - 1].x.toFixed(1)},${zeroY} L${pad},${zeroY} Z`;
+
+                return (
+                  <div key={tf.bm} className="flex-1 min-w-[320px] rounded-xl p-3" style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${tf.color}25` }}>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[11px] font-mono font-bold" style={{ color: tf.color }}>{tf.label} — {data.length} cycles ({minCyc}-{maxCyc} {tf.unit})</span>
+                      {peak && <span className="text-[10px] font-mono" style={{ color: GREEN }}>Peak: cycle {peak.cycle} SR={peak.oos_sharpe.toFixed(2)}</span>}
+                    </div>
+                    <svg viewBox={`0 0 ${cW} ${cH}`} className="w-full" style={{ height: 140 }}>
+                      {/* Zero line */}
+                      <line x1={pad} y1={zeroY} x2={cW - pad} y2={zeroY} stroke="rgba(255,255,255,0.08)" strokeWidth="1" strokeDasharray="3 3" />
+                      {/* SR=1 and SR=2 reference lines */}
+                      {[1, 2, 3].map(sr => {
+                        if (sr > maxSR) return null;
+                        const y = 10 + chartH / 2 - (sr / maxSR) * (chartH / 2);
+                        return <g key={sr}>
+                          <line x1={pad} y1={y} x2={cW - pad} y2={y} stroke="rgba(255,255,255,0.04)" strokeWidth="1" />
+                          <text x={pad - 4} y={y + 3} textAnchor="end" fill="rgba(255,255,255,0.25)" fontSize="8" fontFamily="monospace">{sr}</text>
+                        </g>;
+                      })}
+                      {/* X-axis labels */}
+                      {data.filter((_: any, i: number) => i % Math.max(1, Math.floor(data.length / 8)) === 0).map((r: any) => {
+                        const x = pad + ((r.cycle - minCyc) / cycRange) * chartW;
+                        return <text key={r.cycle} x={x} y={cH - 2} textAnchor="middle" fill="rgba(255,255,255,0.25)" fontSize="7" fontFamily="monospace">{r.cycle}</text>;
+                      })}
+                      {/* Fill */}
+                      <path d={fillPath} fill={`${tf.color}10`} />
+                      {/* Line */}
+                      <path d={linePath} fill="none" stroke={tf.color} strokeWidth="1.5" />
+                      {/* Peak dot */}
+                      {peak && (() => {
+                        const px = pad + ((peak.cycle - minCyc) / cycRange) * chartW;
+                        const py = 10 + chartH / 2 - (peak.oos_sharpe / maxSR) * (chartH / 2);
+                        return <circle cx={px} cy={py} r="4" fill={GREEN} />;
+                      })()}
+                    </svg>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {loading ? (
         <div className="text-center py-12 font-mono text-sm" style={{ color: MUTED }}>
