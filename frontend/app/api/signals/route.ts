@@ -298,15 +298,15 @@ export async function GET(req: NextRequest) {
       const isAll = timeframe === "ALL";
       const interval = intervals[timeframe] || "1 day";
 
-      // Fetch ALL signals within the time window — exclude 'filtered' signals (never traded)
+      // Fetch signals from ACTIVE strategies only — exclude 'filtered' and inactive strategy signals
       const r = await pool.query(`
         SELECT s.id, s.symbol, s.direction, s."entryPrice", s."exitPrice",
                s."returnPct", s.status, s."createdAt", s."closedAt", s."holdBars", s."strategyId",
                s.pair_id, s.pair_symbol, s.pair_direction, s.pair_return,
                st."barMinutes"
         FROM "FracmapSignal" s
-        LEFT JOIN "FracmapStrategy" st ON s."strategyId" = st.id
-        WHERE s.status IN ('open', 'closed')
+        JOIN "FracmapStrategy" st ON s."strategyId" = st.id
+        WHERE s.status IN ('open', 'closed') AND st.active = true
         ${isAll ? '' : `AND s."createdAt" > NOW() - INTERVAL '${interval}'`}
         ORDER BY s."createdAt" DESC
       `);
@@ -320,15 +320,15 @@ export async function GET(req: NextRequest) {
       };
       const interval = intervals[timeframe] || "7 days";
 
-      // Get all paired signals
+      // Get paired signals from ACTIVE strategies only
       const { rows: pairedSignals } = await pool.query(`
         SELECT s.id, s.symbol, s.direction, s."entryPrice", s."exitPrice",
                s."returnPct", s.status, s."createdAt", s."closedAt", s."holdBars", s."strategyId",
                s.pair_id, s.pair_symbol, s.pair_direction, s.pair_return,
                st."barMinutes"
         FROM "FracmapSignal" s
-        LEFT JOIN "FracmapStrategy" st ON s."strategyId" = st.id
-        WHERE s.pair_id IS NOT NULL AND s.status IN ('open', 'closed')
+        JOIN "FracmapStrategy" st ON s."strategyId" = st.id
+        WHERE s.pair_id IS NOT NULL AND s.status IN ('open', 'closed') AND st.active = true
         AND s."createdAt" > NOW() - INTERVAL '${interval}'
         ORDER BY s."createdAt" DESC
       `);
@@ -359,14 +359,14 @@ export async function GET(req: NextRequest) {
         new Date(b.legA.createdAt).getTime() - new Date(a.legA.createdAt).getTime()
       );
 
-      // Get unpaired signals
+      // Get unpaired signals from ACTIVE strategies only
       const { rows: unpaired } = await pool.query(`
         SELECT s.id, s.symbol, s.direction, s."entryPrice", s."exitPrice",
                s."returnPct", s.status, s."createdAt", s."closedAt", s."holdBars",
                st."barMinutes"
         FROM "FracmapSignal" s
-        LEFT JOIN "FracmapStrategy" st ON s."strategyId" = st.id
-        WHERE s.pair_id IS NULL AND s.status IN ('open', 'closed')
+        JOIN "FracmapStrategy" st ON s."strategyId" = st.id
+        WHERE s.pair_id IS NULL AND s.status IN ('open', 'closed') AND st.active = true
         AND s."createdAt" > NOW() - INTERVAL '${interval}'
         ORDER BY s."createdAt" DESC
       `);
