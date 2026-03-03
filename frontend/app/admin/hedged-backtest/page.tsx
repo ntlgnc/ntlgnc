@@ -65,6 +65,7 @@ function metricLabel(m: Metric): string {
 
 function fmtMetric(v: number, m: Metric): string {
   if (m === "oos_win_rate") return v.toFixed(1) + "%";
+  if (v == null) return "—";
   if (m === "oos_avg_ret_bps") return (v >= 0 ? "+" : "") + v.toFixed(0);
   if (m === "oos_t_stat") return v.toFixed(1);
   return v.toFixed(2);
@@ -272,7 +273,7 @@ export default function HedgedBacktestDashboard() {
                             </td>
                           );
                         }
-                        const val = r[metric] as number;
+                        const val = (r[metric] as number) ?? 0;
                         return (
                           <td
                             key={cMax}
