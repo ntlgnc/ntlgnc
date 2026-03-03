@@ -64,6 +64,7 @@ export default function AdminPage() {
   ];
 
   const toolPages = [
+    { href: "/admin/hedged-backtest", label: "Hedged Backtest" },
     { href: "/admin/filter-audit", label: "Filter Audit" },
     { href: "/admin/filter-impact", label: "Filter Impact" },
     { href: "/admin/filter-matrix", label: "Filter Matrix" },
