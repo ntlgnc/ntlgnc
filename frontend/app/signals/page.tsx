@@ -281,12 +281,6 @@ function MiniEquityCurve({ label, signals, color, prices, filters, timeWindow }:
                   r="3" fill={lineColor}
                 />
               )}
-              {/* End value label — top right, clear of ? button */}
-              <text
-                x={W - 4} y={H - 4}
-                textAnchor="end" fill={lineColor}
-                fontSize="13" fontFamily="monospace" fontWeight="900"
-              >{endVal >= 0 ? "+" : ""}{endVal.toFixed(1)}%</text>
             </svg>
             );
           })() : (
@@ -1251,6 +1245,50 @@ export default function SignalsPage() {
           )}
 
           {/* Pair cards */}
+          {/* Hedged equity curve */}
+          {hedgedData?.pairs && hedgedData.pairs.length > 0 && (() => {
+            const closedPairs = hedgedData.pairs
+              .filter((p: any) => p.status === "closed" && p.pair_return != null)
+              .sort((a: any, b: any) => new Date(a.legA.createdAt).getTime() - new Date(b.legA.createdAt).getTime());
+            if (closedPairs.length < 2) return null;
+            let cum = 0;
+            const cumData = closedPairs.map((p: any) => { cum += p.pair_return; return cum; });
+            const minV = Math.min(0, ...cumData);
+            const maxV = Math.max(0, ...cumData);
+            const range = maxV - minV || 1;
+            const cW = 800, cH = 160;
+            const zeroY = cH - ((0 - minV) / range) * (cH - 16) - 8;
+            const endVal = cumData[cumData.length - 1];
+            const lineColor = endVal >= 0 ? GREEN : RED;
+            const points = cumData.map((v: number, i: number) => {
+              const x = (i / (cumData.length - 1)) * cW;
+              const y = cH - ((v - minV) / range) * (cH - 16) - 8;
+              return `${x.toFixed(1)},${y.toFixed(1)}`;
+            });
+            const linePath = `M${points.join(" L")}`;
+            const fillPath = `${linePath} L${cW},${zeroY} L0,${zeroY} Z`;
+            return (
+              <div className="rounded-xl p-4 mb-4" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.08)" }}>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[11px] font-mono font-bold" style={{ color: GOLD }}>Hedged Equity Curve — {closedPairs.length} closed pairs</span>
+                  <span className="text-[14px] font-mono font-black tabular-nums" style={{ color: lineColor }}>
+                    {endVal >= 0 ? "+" : ""}{endVal.toFixed(1)}%
+                  </span>
+                </div>
+                <svg viewBox={`0 0 ${cW} ${cH}`} className="w-full" style={{ height: 160 }}>
+                  <line x1="0" y1={zeroY} x2={cW} y2={zeroY} stroke="rgba(255,255,255,0.08)" strokeWidth="1" strokeDasharray="4 4" />
+                  <path d={fillPath} fill={lineColor === GREEN ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)"} />
+                  <path d={linePath} fill="none" stroke={lineColor} strokeWidth="2" />
+                  <circle
+                    cx={cW}
+                    cy={cH - ((endVal - minV) / range) * (cH - 16) - 8}
+                    r="4" fill={lineColor}
+                  />
+                </svg>
+              </div>
+            );
+          })()}
+
           {hedgedData?.pairs?.length === 0 && (
             <div className="text-center py-12 font-mono text-sm" style={{ color: "rgba(255,255,255,0.4)" }}>
               No hedged pairs yet. Pairs form when opposite-direction signals fire on different coins within the gap window.
