@@ -52,6 +52,15 @@ export async function GET(req: Request) {
       return NextResponse.json({ strategies: rows });
     }
 
+    if (action === "active") {
+      const { rows } = await client.query(
+        `SELECT id, name, type, "barMinutes", "cycleMin", "cycleMax", "minStr", "minCyc",
+                spike, "nearMiss", "holdDiv", "priceExt", config
+         FROM "FracmapStrategy" WHERE active = true ORDER BY "barMinutes"`
+      );
+      return NextResponse.json({ strategies: rows });
+    }
+
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   } finally {
     await client.end();

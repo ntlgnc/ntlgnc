@@ -993,6 +993,7 @@ export default function SignalsPage() {
   const [activeFilters, setActiveFilters] = useState<any[]>([]);
   const [viewMode, setViewMode] = useState<"signals" | "hedged">("signals");
   const [hedgedData, setHedgedData] = useState<{ pairs: any[]; unpaired: any[]; stats: any } | null>(null);
+  const [strategyInfo, setStrategyInfo] = useState<Record<string, any>>({});
 
   // Tick clock every 10s
   useEffect(() => {
@@ -1035,6 +1036,23 @@ export default function SignalsPage() {
     fetch("/api/regime?action=board-summary")
       .then(r => r.json())
       .then(d => { if (d.filters) setActiveFilters(d.filters); })
+      .catch(() => {});
+  }, []);
+
+  // Fetch active strategy details
+  useEffect(() => {
+    fetch("/api/fracmap-strategy?action=active")
+      .then(r => r.json())
+      .then(d => {
+        if (d.strategies) {
+          const info: Record<string, any> = {};
+          for (const s of d.strategies) {
+            const tf = s.barMinutes >= 1440 ? "1D" : s.barMinutes >= 60 ? "1H" : "1M";
+            info[tf] = s;
+          }
+          setStrategyInfo(info);
+        }
+      })
       .catch(() => {});
   }, []);
 
@@ -1423,12 +1441,31 @@ export default function SignalsPage() {
 
       {/* ── Three Equity Charts ── */}
       {viewMode === "signals" && <><div className="flex gap-3 mb-6 flex-wrap">
-        <MiniEquityCurve label="1M" signals={chartSignals["1m"]} color="#3b82f6" prices={prices} timeWindow={timeframe}
-          filters={activeFilters.filter((f: any) => { const tf = (f.timeframe || 'all').toLowerCase(); return tf === 'all' || tf === '1m'; })} />
-        <MiniEquityCurve label="1H" signals={chartSignals["1h"]} color="#a78bfa" prices={prices} timeWindow={timeframe}
-          filters={activeFilters.filter((f: any) => { const tf = (f.timeframe || 'all').toLowerCase(); return tf === 'all' || tf === '1h'; })} />
-        <MiniEquityCurve label="1D" signals={chartSignals["1D"]} color={GOLD} prices={prices} timeWindow={timeframe}
-          filters={activeFilters.filter((f: any) => { const tf = (f.timeframe || 'all').toLowerCase(); return tf === 'all' || tf === '1d'; })} />
+        {[
+          { key: "1m", label: "1M", color: "#3b82f6", tfKey: "1M" },
+          { key: "1h", label: "1H", color: "#a78bfa", tfKey: "1H" },
+          { key: "1D", label: "1D", color: GOLD, tfKey: "1D" },
+        ].map(tf => {
+          const strat = strategyInfo[tf.tfKey];
+          return (
+            <div key={tf.key} className="flex-1 min-w-[320px]">
+              <MiniEquityCurve label={tf.label} signals={chartSignals[tf.key as "1m" | "1h" | "1D"]} color={tf.color} prices={prices} timeWindow={timeframe}
+                filters={activeFilters.filter((f: any) => { const t = (f.timeframe || 'all').toLowerCase(); return t === 'all' || t === tf.key; })} />
+              {strat && (
+                <div className="mt-1 px-2 py-1.5 rounded-b-lg text-[9px] font-mono leading-relaxed" style={{ background: "rgba(255,255,255,0.02)", color: "rgba(255,255,255,0.45)" }}>
+                  <span style={{ color: tf.color }}>{strat.name}</span>
+                  {" · "}C{strat.cycleMin}-{strat.cycleMax}
+                  {" · "}hold÷{strat.holdDiv}
+                  {strat.spike ? " · spike" : ""}
+                  {strat.nearMiss ? " · nearMiss" : ""}
+                  {strat.priceExt ? " · priceExt" : ""}
+                  {strat.config?.hedging_enabled ? " · hedged" : ""}
+                  {strat.config?.coin_universe ? ` · ${strat.config.coin_universe.length} coins` : ""}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {/* ── Main Content: Trade Table + Daily Performance ── */}
