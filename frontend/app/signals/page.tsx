@@ -1227,9 +1227,9 @@ export default function SignalsPage() {
             };
 
             const tfConfigs = [
-              { key: "1D", label: "1D", color: GOLD },
-              { key: "1H", label: "1H", color: "#a78bfa" },
               { key: "1m", label: "1M", color: "#3b82f6" },
+              { key: "1H", label: "1H", color: "#a78bfa" },
+              { key: "1D", label: "1D", color: GOLD },
               { key: "ALL", label: "ALL", color: "rgba(255,255,255,0.6)" },
             ];
 
