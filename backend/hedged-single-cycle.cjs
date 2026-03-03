@@ -204,27 +204,14 @@ function calcMetrics(pairs, barMinutes) {
   const grossLoss = Math.abs(rets.filter(r => r < 0).reduce((s, r) => s + r, 0));
   const pf = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? 999 : 0;
 
-  // Daily-return-based Sharpe (correct annualisation)
-  // Distribute each pair's return evenly across its hold bars, bucket into daily returns
-  const barsPerDay = Math.round(1440 / Math.max(1, barMinutes));
-  const maxBar = pairs.length > 0 ? Math.max(...pairs.map(p => (p.entryBar || 0) + p.pairDuration)) : 0;
-  const nDays = Math.max(1, Math.ceil(maxBar / barsPerDay));
-  const dailyRets = new Float64Array(nDays);
-  for (const p of pairs) {
-    const entry = p.entryBar || 0;
-    const hold = Math.max(1, p.pairDuration);
-    const perBar = p.pairReturn / hold;
-    for (let b = entry; b < entry + hold; b++) {
-      const day = Math.floor(b / barsPerDay);
-      if (day < nDays) dailyRets[day] += perBar;
-    }
-  }
-  let dSum = 0, dSum2 = 0;
-  for (const d of dailyRets) { dSum += d; dSum2 += d * d; }
-  const dMean = dSum / nDays;
-  const dVar = dSum2 / nDays - dMean * dMean;
-  const dStd = Math.sqrt(Math.max(0, dVar));
-  const sharpe = dStd > 0 ? (dMean / dStd) * Math.sqrt(365) : 0;
+  // Per-trade Sharpe annualised by sqrt(trades_per_year)
+  // trades_per_year = total_calendar_days / avg_hold_in_days × (trades / total_calendar_days) ... simplified:
+  // Standard: SR = (mean / std) * sqrt(N) where N = number of independent trading opportunities per year
+  // For hedged pairs: N ≈ 365 / avg_hold_in_days (how many non-overlapping trades fit in a year)
+  const std = Math.sqrt(rets.reduce((s, r) => s + (r - mean) ** 2, 0) / n);
+  const avgHoldDays = (avgHold * barMinutes) / 1440;
+  const tradesPerYear = avgHoldDays > 0 ? 365 / avgHoldDays : 365;
+  const sharpe = std > 0 ? (mean / std) * Math.sqrt(Math.min(tradesPerYear, 365)) : 0;
 
   // t-stat on per-trade returns (still valid for significance testing)
   const sampleStd = n > 1 ? Math.sqrt(rets.reduce((s, r) => s + (r - mean) ** 2, 0) / (n - 1)) : 0;

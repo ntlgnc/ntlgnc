@@ -161,26 +161,11 @@ function calcMetrics(pairs) {
   const gl = Math.abs(rets.filter(r=>r<0).reduce((s,r)=>s+r,0));
   const pf = gl>0?gw/gl:gw>0?999:0;
 
-  // Daily-return-based Sharpe (correct annualisation)
-  const barsPerDay = Math.round(1440 / Math.max(1, BAR_MINUTES));
-  const maxBar = pairs.length > 0 ? Math.max(...pairs.map(p => (p.entryBar || 0) + p.pairDuration)) : 0;
-  const nDays = Math.max(1, Math.ceil(maxBar / barsPerDay));
-  const dailyRets = new Float64Array(nDays);
-  for (const p of pairs) {
-    const entry = p.entryBar || 0;
-    const hold = Math.max(1, p.pairDuration);
-    const perBar = p.pairReturn / hold;
-    for (let b = entry; b < entry + hold; b++) {
-      const day = Math.floor(b / barsPerDay);
-      if (day < nDays) dailyRets[day] += perBar;
-    }
-  }
-  let dSum = 0, dSum2 = 0;
-  for (const d of dailyRets) { dSum += d; dSum2 += d * d; }
-  const dMean = dSum / nDays;
-  const dVar = dSum2 / nDays - dMean * dMean;
-  const dStd = Math.sqrt(Math.max(0, dVar));
-  const sharpe = dStd > 0 ? (dMean / dStd) * Math.sqrt(365) : 0;
+  // Per-trade Sharpe annualised by sqrt(trades_per_year)
+  const std = Math.sqrt(rets.reduce((s, r) => s + (r - mean) ** 2, 0) / n);
+  const avgHoldDays = (avgHold * BAR_MINUTES) / 1440;
+  const tradesPerYear = avgHoldDays > 0 ? 365 / avgHoldDays : 365;
+  const sharpe = std > 0 ? (mean / std) * Math.sqrt(Math.min(tradesPerYear, 365)) : 0;
 
   const sStd = n>1?Math.sqrt(rets.reduce((s,r)=>s+(r-mean)**2,0)/(n-1)):0;
   const tStat = sStd>0?(mean/(sStd/Math.sqrt(n))):0;
