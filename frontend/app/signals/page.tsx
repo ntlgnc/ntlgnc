@@ -63,19 +63,82 @@ function formatDuration(ms: number): string {
 }
 
 // ─── Mini Equity Curve ──────────────────────────────────────────────────
-function MiniEquityCurve({ label, signals, color, prices }: { label: string; signals: Signal[]; color: string; prices: Record<string, number> }) {
+function MiniEquityCurve({ label, signals, color, prices, filters, timeWindow }: { label: string; signals: Signal[]; color: string; prices: Record<string, number>; filters?: any[]; timeWindow?: "1H" | "1D" | "1W" | "1M" | "ALL" }) {
+  const [showTooltip, setShowTooltip] = useState(false);
+  const [mtmSeries, setMtmSeries] = useState<{ time: string; totalReturn: number }[]>([]);
   const closed = signals.filter(s => s.status === "closed" && s.returnPct != null);
   const openSigs = signals.filter(s => s.status === "open");
   const sorted = [...closed].sort(
     (a, b) => new Date(a.closedAt || a.createdAt).getTime() - new Date(b.closedAt || b.createdAt).getTime()
   );
 
+  // Fetch MTM blended equity curve
+  const tf = label === "1M" ? "1m" : label === "1H" ? "1h" : "1d";
+  useEffect(() => {
+    const fetchMtm = () => {
+      fetch(`/api/signals/mtm?tf=${tf}`)
+        .then(r => r.json())
+        .then(d => { if (d.series && d.series.length > 0) setMtmSeries(d.series); })
+        .catch(() => {});
+    };
+    fetchMtm();
+    const iv = setInterval(fetchMtm, 60_000);
+    return () => clearInterval(iv);
+  }, [tf]);
+
+  // Build closed-only curve (used for stats + fallback)
   const eqCurve = useMemo(() => {
     let cum = 0;
     return sorted.map(s => { cum += s.returnPct || 0; return cum; });
   }, [sorted]);
 
+  // Build display curve: use MTM series if it has data, otherwise closed-only
+  const { displayValues, displayTimes } = useMemo(() => {
+    if (mtmSeries.length >= 2) {
+      return {
+        displayValues: mtmSeries.map(p => p.totalReturn),
+        displayTimes: mtmSeries.map(p => new Date(p.time).getTime()),
+      };
+    }
+    // Fallback to closed-only
+    return {
+      displayValues: eqCurve,
+      displayTimes: sorted.map(s => new Date(s.closedAt || s.createdAt).getTime()),
+    };
+  }, [mtmSeries, eqCurve, sorted]);
+
+  // Apply time window filter: crop to the selected range and rebase to 0 at window start
+  const { windowValues, windowTimes } = useMemo(() => {
+    if (!timeWindow || timeWindow === "ALL" || displayTimes.length < 2) {
+      return { windowValues: displayValues, windowTimes: displayTimes };
+    }
+    const nowMs = Date.now();
+    const windowMs: Record<string, number> = { "1H": 60*60*1000, "1D": 24*60*60*1000, "1W": 7*24*60*60*1000, "1M": 30*24*60*60*1000 };
+    const cutoff = nowMs - (windowMs[timeWindow] || Infinity);
+    
+    // Find the last point before the cutoff (or first point after) to use as baseline
+    let baselineValue = 0;
+    let startIdx = 0;
+    for (let i = 0; i < displayTimes.length; i++) {
+      if (displayTimes[i] >= cutoff) { startIdx = i; break; }
+      baselineValue = displayValues[i];
+      startIdx = i + 1;
+    }
+    // Include one point before cutoff for smooth start, rebased
+    const effectiveStart = Math.max(0, startIdx - 1);
+    const slicedValues = displayValues.slice(effectiveStart);
+    const slicedTimes = displayTimes.slice(effectiveStart);
+    const base = slicedValues.length > 0 ? slicedValues[0] : 0;
+    
+    return {
+      windowValues: slicedValues.map(v => +(v - base).toFixed(3)),
+      windowTimes: slicedTimes,
+    };
+  }, [displayValues, displayTimes, timeWindow]);
+
   const cumReturn = eqCurve.length > 0 ? eqCurve[eqCurve.length - 1] : 0;
+  // curveReturn = what the chart actually shows (windowed MTM endpoint)
+  // We compute this after unrealisedPnL is available below
   const wins = sorted.filter(s => (s.returnPct || 0) > 0).length;
   const winRate = sorted.length > 0 ? (wins / sorted.length * 100) : 0;
   const mean = sorted.length > 0 ? cumReturn / sorted.length : 0;
@@ -94,52 +157,113 @@ function MiniEquityCurve({ label, signals, color, prices }: { label: string; sig
   }).filter(r => r !== null) as number[];
   const unrealisedPnL = openReturns.reduce((s, r) => s + r, 0);
 
+  // Chart color should reflect the current total value (closed + live unrealised)
+  // This matches what the user sees: if open positions make the portfolio positive, chart is green
+  const curveReturn = cumReturn + unrealisedPnL;
+
   const W = 300, H = 80;
+
+  // Time-based x positions
+  const timePositions = useMemo(() => {
+    if (windowTimes.length < 2) return windowTimes.map(() => 0);
+    const minT = Math.min(...windowTimes);
+    const maxT = Math.max(...windowTimes);
+    const range = maxT - minT || 1;
+    return windowTimes.map(t => ((t - minT) / range) * W);
+  }, [windowTimes]);
+
   const curveD = useMemo(() => {
-    if (eqCurve.length < 2) return "";
-    const minV = Math.min(0, ...eqCurve);
-    const maxV = Math.max(0, ...eqCurve);
+    if (windowValues.length < 2) return "";
+    const minV = Math.min(0, ...windowValues);
+    const maxV = Math.max(0, ...windowValues);
     const range = maxV - minV || 1;
-    return eqCurve.map((v, i) => {
-      const x = (i / (eqCurve.length - 1)) * W;
+    return windowValues.map((v, i) => {
+      const x = timePositions[i];
       const y = H - ((v - minV) / range) * (H - 8) - 4;
       return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
     }).join(" ");
-  }, [eqCurve]);
+  }, [windowValues, timePositions]);
 
   // Area under curve
   const areaD = useMemo(() => {
-    if (eqCurve.length < 2) return "";
-    const minV = Math.min(0, ...eqCurve);
-    const maxV = Math.max(0, ...eqCurve);
+    if (windowValues.length < 2) return "";
+    const minV = Math.min(0, ...windowValues);
+    const maxV = Math.max(0, ...windowValues);
     const range = maxV - minV || 1;
     const zeroY = H - ((0 - minV) / range) * (H - 8) - 4;
-    const points = eqCurve.map((v, i) => {
-      const x = (i / (eqCurve.length - 1)) * W;
+    const points = windowValues.map((v, i) => {
+      const x = timePositions[i];
       const y = H - ((v - minV) / range) * (H - 8) - 4;
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     });
     return `M0,${zeroY} L${points.join(" L")} L${W},${zeroY} Z`;
-  }, [eqCurve]);
+  }, [windowValues, timePositions]);
 
   return (
-    <div className="flex-1 min-w-[320px] rounded-xl overflow-hidden" style={{
+    <div className="flex-1 min-w-[320px] rounded-xl overflow-hidden relative" style={{
       background: "rgba(255,255,255,0.02)",
       border: "1px solid rgba(212,168,67,0.25)",
     }}>
+      {/* Info button */}
+      <button
+        onClick={() => setShowTooltip(!showTooltip)}
+        className="absolute top-2 left-2 z-10 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-mono font-bold transition-all hover:brightness-150"
+        style={{ background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.4)", border: "1px solid rgba(255,255,255,0.08)" }}
+      >?</button>
+
+      {/* Tooltip overlay */}
+      {showTooltip && (
+        <div className="absolute inset-0 z-20 p-4 flex flex-col justify-between" style={{
+          background: "rgba(8,10,16,0.97)", backdropFilter: "blur(8px)",
+          border: "1px solid rgba(212,168,67,0.25)", borderRadius: 12,
+        }}>
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-[12px] font-mono font-bold" style={{ color }}>{label} Bar Strategy</span>
+              <button onClick={() => setShowTooltip(false)} className="text-[10px] font-mono text-white/40 hover:text-white/70">✕</button>
+            </div>
+            <div className="text-[10px] font-mono text-white/60 leading-relaxed space-y-2">
+              <p>
+                <span className="text-white/90 font-bold">What it does:</span>{" "}
+                {label === "1M" ? "Detects movement exhaustions on 1-minute candles. High frequency — ~100+ signals/day. Best for capturing micro-momentum." :
+                 label === "1H" ? "Detects movement exhaustions on 1-hour candles. Medium frequency — ~20-40 signals/day. Our highest volume and most backtested strategy." :
+                 "Detects movement exhaustions on daily candles. Low frequency — ~2-5 signals/day. Captures larger swing reversals."}
+              </p>
+              <p>
+                <span className="text-white/90 font-bold">How signals work:</span>{" "}
+                {label === "1M" ? "Price crosses above/below target level → generates a counter-trend signal with a hold period based on the dominant cycle length." :
+                 label === "1H" ? "Price crosses above/below target level → generates a counter-trend signal with a hold period based on the dominant cycle length." :
+                 "Price crosses above/below target level → generates a counter-trend signal with a hold period based on the dominant cycle length."}
+              </p>
+            </div>
+          </div>
+          {/* Active filters for this timeframe */}
+          {filters && filters.length > 0 && (
+            <div className="mt-3 pt-2" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+              <div className="text-[9px] font-mono text-white/40 mb-1.5">ACTIVE FILTERS ({filters.length})</div>
+              {filters.slice(0, 3).map((f: any, i: number) => (
+                <div key={i} className="text-[9px] font-mono text-white/50 mb-1">
+                  <span style={{ color: GOLD }}>●</span> {f.feature?.slice(0, 40)}{f.feature?.length > 40 ? '…' : ''}
+                </div>
+              ))}
+              {filters.length > 3 && <div className="text-[9px] font-mono text-white/30">+{filters.length - 3} more</div>}
+            </div>
+          )}
+        </div>
+      )}
       <div className="flex">
         {/* Chart - left side */}
         <div className="flex-1 p-3 pr-0 flex items-stretch">
-          {eqCurve.length > 1 ? (
+          {displayValues.length > 1 ? (
             <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-full" style={{ minHeight: 120 }}>
               <defs>
                 <linearGradient id={`grad-${label}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={cumReturn >= 0 ? GREEN : RED} stopOpacity="0.15" />
-                  <stop offset="100%" stopColor={cumReturn >= 0 ? GREEN : RED} stopOpacity="0.01" />
+                  <stop offset="0%" stopColor={curveReturn >= 0 ? GREEN : RED} stopOpacity="0.15" />
+                  <stop offset="100%" stopColor={curveReturn >= 0 ? GREEN : RED} stopOpacity="0.01" />
                 </linearGradient>
               </defs>
               <path d={areaD} fill={`url(#grad-${label})`} />
-              <path d={curveD} fill="none" stroke={cumReturn >= 0 ? GREEN : RED} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+              <path d={curveD} fill="none" stroke={curveReturn >= 0 ? GREEN : RED} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
             </svg>
           ) : (
             <div className="flex items-center justify-center w-full" style={{ minHeight: 120 }}>
@@ -848,6 +972,9 @@ export default function SignalsPage() {
   const [now, setNow] = useState(Date.now());
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [page, setPage] = useState(0);
+  const [activeFilters, setActiveFilters] = useState<any[]>([]);
+  const [viewMode, setViewMode] = useState<"signals" | "hedged">("signals");
+  const [hedgedData, setHedgedData] = useState<{ pairs: any[]; unpaired: any[]; stats: any } | null>(null);
 
   // Tick clock every 10s
   useEffect(() => {
@@ -858,7 +985,7 @@ export default function SignalsPage() {
   // Load signals
   useEffect(() => {
     const load = () => {
-      fetch(`/api/signals?action=list&timeframe=${timeframe}&limit=2000`)
+      fetch(`/api/signals?action=list&timeframe=${timeframe}`)
         .then(r => r.json())
         .then(d => { if (d.signals) setSignals(d.signals); })
         .catch(() => {});
@@ -868,8 +995,30 @@ export default function SignalsPage() {
     return () => clearInterval(iv);
   }, [timeframe, isPaid]);
 
+  // Load hedged pairs when in hedged view
+  useEffect(() => {
+    if (viewMode !== "hedged") return;
+    const load = () => {
+      fetch(`/api/signals?action=hedged-pairs&timeframe=${timeframe}`)
+        .then(r => r.json())
+        .then(d => { if (d.pairs) setHedgedData(d); })
+        .catch(() => {});
+    };
+    load();
+    const iv = setInterval(load, isPaid ? 10000 : 60000);
+    return () => clearInterval(iv);
+  }, [viewMode, timeframe, isPaid]);
+
   // Reset page when filters change
-  useEffect(() => { setPage(0); }, [periodicityFilter, directionFilter, timeframe]);
+  useEffect(() => { setPage(0); }, [periodicityFilter, directionFilter, timeframe, viewMode]);
+
+  // Load active board filters
+  useEffect(() => {
+    fetch("/api/regime?action=board-summary")
+      .then(r => r.json())
+      .then(d => { if (d.filters) setActiveFilters(d.filters); })
+      .catch(() => {});
+  }, []);
 
   // Bucket signals by periodicity
   const byPeriodicity = useMemo(() => {
@@ -897,7 +1046,7 @@ export default function SignalsPage() {
     return result;
   }, [signals, periodicityFilter, directionFilter, isPaid]);
 
-  // Chart signals (same filters applied to charts)
+  // Chart signals — use the same time-filtered dataset as the table
   const chartSignals = useMemo(() => {
     let result = signals;
     if (directionFilter !== "all") {
@@ -905,10 +1054,15 @@ export default function SignalsPage() {
         directionFilter === "long" ? s.direction === "LONG" : s.direction === "SHORT"
       );
     }
+    // Apply same free-user delay as filtered
+    if (!isPaid) {
+      const cutoff = Date.now() - NET_POSITION_DELAY_MINS * 60 * 1000;
+      result = result.filter(s => new Date(s.createdAt).getTime() <= cutoff);
+    }
     const buckets: Record<"1m" | "1h" | "1D", Signal[]> = { "1m": [], "1h": [], "1D": [] };
     result.forEach(s => { buckets[getPeriodicity(s)].push(s); });
     return buckets;
-  }, [signals, directionFilter]);
+  }, [signals, directionFilter, isPaid]);
 
   // Pagination
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
@@ -917,12 +1071,12 @@ export default function SignalsPage() {
   // Open signals for price fetching
   const open = signals.filter(s => s.status === "open");
 
-  // Fetch prices for open trades
+  // Fetch prices for all visible signals (open ones need live price, closed ones with missing exitPrice need fallback)
   useEffect(() => {
-    if (open.length === 0) return;
-    const symbols = [...new Set(open.map(s => s.symbol))];
+    const allSymbols = [...new Set(signals.map(s => s.symbol))];
+    if (allSymbols.length === 0) return;
     const fetchPrices = () => {
-      fetch(`/api/signals?action=prices&symbols=${symbols.join(",")}`)
+      fetch(`/api/signals?action=prices&symbols=${allSymbols.join(",")}`)
         .then(r => r.json())
         .then(d => { if (d.prices) setPrices(d.prices); })
         .catch(() => {});
@@ -1030,13 +1184,118 @@ export default function SignalsPage() {
             }}>{tf}</button>
           ))}
         </div>
+        <div className="flex gap-px rounded overflow-hidden border" style={{ borderColor: "rgba(255,255,255,0.08)" }}>
+          {(["signals", "hedged"] as const).map(vm => (
+            <button key={vm} onClick={() => setViewMode(vm)} className="px-3 py-1 text-[10px] font-mono" style={{
+              background: viewMode === vm ? "rgba(212,168,67,0.1)" : "transparent",
+              color: viewMode === vm ? GOLD : "rgba(255,255,255,0.55)",
+            }}>{vm === "signals" ? "All Signals" : "Hedged Pairs"}</button>
+          ))}
+        </div>
       </div>
 
+      {/* ── Hedged Pairs View ── */}
+      {viewMode === "hedged" && (
+        <div className="mb-6">
+          {hedgedData && hedgedData.stats && (
+            <div className="rounded-xl p-4 mb-4 flex items-center gap-8 flex-wrap" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(212,168,67,0.15)" }}>
+              <div className="text-center">
+                <div className="text-[9px] font-mono uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.4)" }}>Pairs</div>
+                <div className="text-xl font-mono font-bold" style={{ color: GOLD }}>{hedgedData.stats.total_pairs}</div>
+              </div>
+              <div className="text-center">
+                <div className="text-[9px] font-mono uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.4)" }}>Open</div>
+                <div className="text-xl font-mono font-bold text-white">{hedgedData.stats.open_pairs}</div>
+              </div>
+              <div className="text-center">
+                <div className="text-[9px] font-mono uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.4)" }}>Avg Ret (bps)</div>
+                <div className="text-xl font-mono font-bold" style={{ color: hedgedData.stats.avg_pair_return_bps >= 0 ? GREEN : RED }}>
+                  {hedgedData.stats.avg_pair_return_bps >= 0 ? "+" : ""}{hedgedData.stats.avg_pair_return_bps}
+                </div>
+              </div>
+              <div className="text-center">
+                <div className="text-[9px] font-mono uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.4)" }}>Pair WR</div>
+                <div className="text-xl font-mono font-bold" style={{ color: hedgedData.stats.pair_win_rate > 50 ? GREEN : RED }}>
+                  {hedgedData.stats.pair_win_rate}%
+                </div>
+              </div>
+              <div className="text-center">
+                <div className="text-[9px] font-mono uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.4)" }}>Unpaired</div>
+                <div className="text-xl font-mono font-bold" style={{ color: "rgba(255,255,255,0.4)" }}>{hedgedData.stats.unpaired_count}</div>
+              </div>
+            </div>
+          )}
+
+          {/* Pair cards */}
+          {hedgedData?.pairs?.length === 0 && (
+            <div className="text-center py-12 font-mono text-sm" style={{ color: "rgba(255,255,255,0.4)" }}>
+              No hedged pairs yet. Pairs form when opposite-direction signals fire on different coins within the gap window.
+            </div>
+          )}
+          <div className="space-y-2">
+            {hedgedData?.pairs?.map((p: any) => {
+              const isClosed = p.status === "closed";
+              const pairRet = p.pair_return;
+              const borderColor = pairRet == null ? "rgba(255,255,255,0.08)" : pairRet > 0 ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)";
+              return (
+                <div key={p.pair_id} className="rounded-xl p-3 flex items-center gap-4 flex-wrap" style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${borderColor}` }}>
+                  {/* Leg A */}
+                  <div className="flex items-center gap-2 min-w-[140px]">
+                    <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded" style={{
+                      background: p.legA.direction === "LONG" ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)",
+                      color: p.legA.direction === "LONG" ? GREEN : RED,
+                    }}>{p.legA.direction[0]}</span>
+                    <span className="text-[12px] font-mono font-bold text-white">{p.legA.symbol?.replace("USDT", "")}</span>
+                    {p.legA.returnPct != null && (
+                      <span className="text-[10px] font-mono tabular-nums" style={{ color: p.legA.returnPct > 0 ? GREEN : RED }}>
+                        {p.legA.returnPct > 0 ? "+" : ""}{(+p.legA.returnPct).toFixed(2)}%
+                      </span>
+                    )}
+                  </div>
+                  {/* Arrow */}
+                  <span className="text-[10px] font-mono" style={{ color: GOLD }}>+</span>
+                  {/* Leg B */}
+                  <div className="flex items-center gap-2 min-w-[140px]">
+                    <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded" style={{
+                      background: p.legB.direction === "LONG" ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)",
+                      color: p.legB.direction === "LONG" ? GREEN : RED,
+                    }}>{p.legB.direction[0]}</span>
+                    <span className="text-[12px] font-mono font-bold text-white">{p.legB.symbol?.replace("USDT", "")}</span>
+                    {p.legB.returnPct != null && (
+                      <span className="text-[10px] font-mono tabular-nums" style={{ color: p.legB.returnPct > 0 ? GREEN : RED }}>
+                        {p.legB.returnPct > 0 ? "+" : ""}{(+p.legB.returnPct).toFixed(2)}%
+                      </span>
+                    )}
+                  </div>
+                  {/* Pair return */}
+                  <div className="flex-1" />
+                  <div className="text-right">
+                    {pairRet != null ? (
+                      <div className="text-[16px] font-mono font-black tabular-nums" style={{ color: pairRet > 0 ? GREEN : RED }}>
+                        {pairRet > 0 ? "+" : ""}{(+pairRet).toFixed(2)}%
+                      </div>
+                    ) : (
+                      <div className="text-[11px] font-mono" style={{ color: GOLD }}>OPEN</div>
+                    )}
+                    <div className="text-[9px] font-mono" style={{ color: "rgba(255,255,255,0.3)" }}>
+                      {isClosed ? "closed" : "active"} · {new Date(p.legA.createdAt).toLocaleDateString()}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* ── Three Equity Charts ── */}
-      <div className="flex gap-3 mb-6 flex-wrap">
-        <MiniEquityCurve label="1M" signals={chartSignals["1m"]} color="#3b82f6" prices={prices} />
-        <MiniEquityCurve label="1H" signals={chartSignals["1h"]} color="#a78bfa" prices={prices} />
-        <MiniEquityCurve label="1D" signals={chartSignals["1D"]} color={GOLD} prices={prices} />
+      {viewMode === "signals" && <><div className="flex gap-3 mb-6 flex-wrap">
+        <MiniEquityCurve label="1M" signals={chartSignals["1m"]} color="#3b82f6" prices={prices} timeWindow={timeframe}
+          filters={activeFilters.filter((f: any) => { const tf = (f.timeframe || 'all').toLowerCase(); return tf === 'all' || tf === '1m'; })} />
+        <MiniEquityCurve label="1H" signals={chartSignals["1h"]} color="#a78bfa" prices={prices} timeWindow={timeframe}
+          filters={activeFilters.filter((f: any) => { const tf = (f.timeframe || 'all').toLowerCase(); return tf === 'all' || tf === '1h'; })} />
+        <MiniEquityCurve label="1D" signals={chartSignals["1D"]} color={GOLD} prices={prices} timeWindow={timeframe}
+          filters={activeFilters.filter((f: any) => { const tf = (f.timeframe || 'all').toLowerCase(); return tf === 'all' || tf === '1d'; })} />
       </div>
 
       {/* ── Main Content: Trade Table + Daily Performance ── */}
@@ -1178,25 +1437,28 @@ export default function SignalsPage() {
                           <span style={{ color: "rgba(255,255,255,0.7)" }}>{sig.entryPrice?.toFixed(sig.entryPrice > 100 ? 2 : 4)}</span>
                         </div>
                         <div className="flex items-baseline gap-1">
-                          <span className="text-[8px] text-white/45">out</span>
+                          <span className="text-[8px] text-white/45">{sig.status === "open" ? "now" : "out"}</span>
                           <span style={{ color: "rgba(255,255,255,0.65)" }}>
-                            {sig.status === "closed"
-                              ? sig.exitPrice?.toFixed(sig.exitPrice > 100 ? 2 : 4)
-                              : (prices[sig.symbol]
-                                ? prices[sig.symbol]?.toFixed(prices[sig.symbol] > 100 ? 2 : 4)
-                                : "—")
-                            }
+                            {(() => {
+                              // Use exitPrice if available (closed trades with proper data)
+                              const ep = sig.exitPrice;
+                              if (ep) return ep.toFixed(ep > 100 ? 2 : 4);
+                              // Fall back to current price for open trades or closed trades missing exitPrice
+                              const cp = prices[sig.symbol];
+                              if (cp) return cp.toFixed(cp > 100 ? 2 : 4);
+                              return "—";
+                            })()}
                           </span>
                         </div>
                       </div>
                     </td>
                     <td className="py-2 px-2 font-mono tabular-nums text-center font-bold" style={{
                       color: sig.status === "closed"
-                        ? (won ? GREEN : RED)
-                        : (unrealised !== null ? (unrealised > 0 ? GREEN : RED) : "rgba(255,255,255,0.3)")
+                        ? ((sig.returnPct || 0) > 0 ? GREEN : (sig.returnPct || 0) < 0 ? RED : "rgba(255,255,255,0.5)")
+                        : (unrealised !== null ? (unrealised > 0 ? GREEN : unrealised < 0 ? RED : "rgba(255,255,255,0.5)") : "rgba(255,255,255,0.3)")
                     }}>
                       {sig.status === "closed"
-                        ? `${won ? "+" : ""}${(sig.returnPct || 0).toFixed(3)}%`
+                        ? `${(sig.returnPct || 0) > 0 ? "+" : ""}${(sig.returnPct || 0).toFixed(3)}%`
                         : (unrealised !== null ? `${unrealised > 0 ? "+" : ""}${unrealised.toFixed(3)}%` : "—")
                       }
                     </td>
@@ -1213,8 +1475,12 @@ export default function SignalsPage() {
                             </span>
                           </div>
                       ) : (
-                        <span className="text-[10px] font-mono" style={{ color: won ? GREEN : RED }}>
-                          {won ? "✓" : "✗"}
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[8px] font-mono"
+                          style={{ 
+                            background: "rgba(255,255,255,0.04)", 
+                            color: "rgba(255,255,255,0.5)" 
+                          }}>
+                          Closed
                         </span>
                       )}
                     </td>
@@ -1314,6 +1580,7 @@ export default function SignalsPage() {
           </Link>
         </div>
       )}
+      </>}
     </div>
   );
 }
