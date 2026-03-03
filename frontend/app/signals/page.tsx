@@ -1222,9 +1222,33 @@ export default function SignalsPage() {
               .sort((a: any, b: any) => new Date(a.legA.createdAt).getTime() - new Date(b.legA.createdAt).getTime());
             const openPairs = hedgedData.pairs.filter((p: any) => p.status === "open");
             const pairRets = closedPairs.map((p: any) => +p.pair_return);
+
+            // Compute unrealised returns for open pairs using live prices
+            let openPairPnL = 0;
+            const openPairReturns: number[] = [];
+            for (const p of openPairs) {
+              let legAret = 0, legBret = 0, hasData = false;
+              const cpA = prices[p.legA?.symbol];
+              const cpB = prices[p.legB?.symbol];
+              if (cpA && p.legA?.entryPrice) {
+                legAret = p.legA.direction === "LONG" ? (cpA / p.legA.entryPrice - 1) * 100 : (p.legA.entryPrice / cpA - 1) * 100;
+                hasData = true;
+              }
+              if (cpB && p.legB?.entryPrice) {
+                legBret = p.legB.direction === "LONG" ? (cpB / p.legB.entryPrice - 1) * 100 : (p.legB.entryPrice / cpB - 1) * 100;
+                hasData = true;
+              }
+              if (hasData) { const pRet = legAret + legBret; openPairPnL += pRet; openPairReturns.push(pRet); }
+            }
+
             let cum = 0;
             const cumData = closedPairs.map((p: any) => { cum += p.pair_return; return cum; });
-            const totalRet = cumData.length > 0 ? cumData[cumData.length - 1] : 0;
+            // Append unrealised as the last point on the curve
+            if (openPairReturns.length > 0 && cumData.length > 0) {
+              cumData.push(cum + openPairPnL);
+            }
+            const closedRet = pairRets.reduce((s: number, r: number) => s + r, 0);
+            const totalRet = closedRet + openPairPnL;
             const wins = pairRets.filter((r: number) => r > 0).length;
             const winRate = pairRets.length > 0 ? (wins / pairRets.length * 100) : 0;
             const meanRet = pairRets.length > 0 ? pairRets.reduce((s: number, r: number) => s + r, 0) / pairRets.length : 0;
@@ -1312,7 +1336,14 @@ export default function SignalsPage() {
                         <div className="flex items-baseline gap-1.5">
                           <span className="text-[8px] font-mono text-white/65 w-[34px] text-right">open</span>
                           <span className="text-[11px] font-mono font-bold text-white/85 tabular-nums">{openPairs.length}</span>
-                          <span className="text-[11px] font-mono text-white/80 ml-auto">—</span>
+                          {openPairReturns.length > 0 ? (
+                            <span className="text-[12px] font-mono font-bold tabular-nums leading-tight ml-auto"
+                              style={{ color: openPairPnL >= 0 ? GREEN : RED }}>
+                              {openPairPnL >= 0 ? "+" : ""}{openPairPnL.toFixed(2)}%
+                            </span>
+                          ) : (
+                            <span className="text-[11px] font-mono text-white/80 ml-auto">—</span>
+                          )}
                         </div>
                       </div>
 
@@ -1346,7 +1377,16 @@ export default function SignalsPage() {
           <div className="space-y-2">
             {hedgedData?.pairs?.map((p: any) => {
               const isClosed = p.status === "closed";
-              const pairRet = p.pair_return;
+              // Use actual pair_return for closed, compute MTM for open
+              let pairRet = p.pair_return;
+              if (pairRet == null && p.legA && p.legB) {
+                const cpA = prices[p.legA.symbol];
+                const cpB = prices[p.legB.symbol];
+                let mtm = 0; let hasMtm = false;
+                if (cpA && p.legA.entryPrice) { mtm += p.legA.direction === "LONG" ? (cpA / p.legA.entryPrice - 1) * 100 : (p.legA.entryPrice / cpA - 1) * 100; hasMtm = true; }
+                if (cpB && p.legB.entryPrice) { mtm += p.legB.direction === "LONG" ? (cpB / p.legB.entryPrice - 1) * 100 : (p.legB.entryPrice / cpB - 1) * 100; hasMtm = true; }
+                if (hasMtm) pairRet = mtm;
+              }
               const borderColor = pairRet == null ? "rgba(255,255,255,0.08)" : pairRet > 0 ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)";
               return (
                 <div key={p.pair_id} className="rounded-xl p-3 flex items-center gap-4 flex-wrap" style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${borderColor}` }}>
@@ -1381,15 +1421,13 @@ export default function SignalsPage() {
                   {/* Pair return */}
                   <div className="flex-1" />
                   <div className="text-right">
-                    {pairRet != null ? (
-                      <div className="text-[16px] font-mono font-black tabular-nums" style={{ color: pairRet > 0 ? GREEN : RED }}>
-                        {pairRet > 0 ? "+" : ""}{(+pairRet).toFixed(2)}%
-                      </div>
-                    ) : (
-                      <div className="text-[11px] font-mono" style={{ color: GOLD }}>OPEN</div>
-                    )}
+                    <div className="text-[16px] font-mono font-black tabular-nums" style={{
+                      color: pairRet != null ? (pairRet > 0 ? GREEN : pairRet < 0 ? RED : "rgba(255,255,255,0.5)") : "rgba(255,255,255,0.3)"
+                    }}>
+                      {pairRet != null ? `${pairRet > 0 ? "+" : ""}${(+pairRet).toFixed(2)}%` : "—"}
+                    </div>
                     <div className="text-[9px] font-mono" style={{ color: "rgba(255,255,255,0.3)" }}>
-                      {isClosed ? "closed" : "active"} · {new Date(p.legA.createdAt).toLocaleDateString()}
+                      {isClosed ? "closed" : "live"} · {new Date(p.legA.createdAt).toLocaleDateString()}
                     </div>
                   </div>
                 </div>
