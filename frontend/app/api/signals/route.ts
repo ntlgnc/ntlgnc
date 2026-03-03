@@ -316,7 +316,7 @@ export async function GET(req: NextRequest) {
     if (action === "hedged-pairs") {
       const timeframe = searchParams.get("timeframe") || "1W";
       const intervals: Record<string, string> = {
-        "1D": "1 day", "1W": "7 days", "1M": "30 days", "ALL": "9999 days",
+        "1H": "1 hour", "1D": "1 day", "1W": "7 days", "1M": "30 days", "ALL": "9999 days",
       };
       const interval = intervals[timeframe] || "7 days";
 
