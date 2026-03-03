@@ -1215,76 +1215,121 @@ export default function SignalsPage() {
       {/* ── Hedged Pairs View ── */}
       {viewMode === "hedged" && (
         <div className="mb-6">
-          {hedgedData && hedgedData.stats && (
-            <div className="rounded-xl p-4 mb-4 flex items-center gap-8 flex-wrap" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(212,168,67,0.15)" }}>
-              <div className="text-center">
-                <div className="text-[9px] font-mono uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.4)" }}>Pairs</div>
-                <div className="text-xl font-mono font-bold" style={{ color: GOLD }}>{hedgedData.stats.total_pairs}</div>
-              </div>
-              <div className="text-center">
-                <div className="text-[9px] font-mono uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.4)" }}>Open</div>
-                <div className="text-xl font-mono font-bold text-white">{hedgedData.stats.open_pairs}</div>
-              </div>
-              <div className="text-center">
-                <div className="text-[9px] font-mono uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.4)" }}>Avg Ret (bps)</div>
-                <div className="text-xl font-mono font-bold" style={{ color: hedgedData.stats.avg_pair_return_bps >= 0 ? GREEN : RED }}>
-                  {hedgedData.stats.avg_pair_return_bps >= 0 ? "+" : ""}{hedgedData.stats.avg_pair_return_bps}
-                </div>
-              </div>
-              <div className="text-center">
-                <div className="text-[9px] font-mono uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.4)" }}>Pair WR</div>
-                <div className="text-xl font-mono font-bold" style={{ color: hedgedData.stats.pair_win_rate > 50 ? GREEN : RED }}>
-                  {hedgedData.stats.pair_win_rate}%
-                </div>
-              </div>
-              <div className="text-center">
-                <div className="text-[9px] font-mono uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.4)" }}>Unpaired</div>
-                <div className="text-xl font-mono font-bold" style={{ color: "rgba(255,255,255,0.4)" }}>{hedgedData.stats.unpaired_count}</div>
-              </div>
-            </div>
-          )}
-
-          {/* Pair cards */}
-          {/* Hedged equity curve */}
-          {hedgedData?.pairs && hedgedData.pairs.length > 0 && (() => {
+          {/* Hedged equity chart + stats card */}
+          {hedgedData?.pairs && (() => {
             const closedPairs = hedgedData.pairs
               .filter((p: any) => p.status === "closed" && p.pair_return != null)
               .sort((a: any, b: any) => new Date(a.legA.createdAt).getTime() - new Date(b.legA.createdAt).getTime());
-            if (closedPairs.length < 2) return null;
+            const openPairs = hedgedData.pairs.filter((p: any) => p.status === "open");
+            const pairRets = closedPairs.map((p: any) => +p.pair_return);
             let cum = 0;
             const cumData = closedPairs.map((p: any) => { cum += p.pair_return; return cum; });
-            const minV = Math.min(0, ...cumData);
-            const maxV = Math.max(0, ...cumData);
-            const range = maxV - minV || 1;
-            const cW = 800, cH = 160;
-            const zeroY = cH - ((0 - minV) / range) * (cH - 16) - 8;
-            const endVal = cumData[cumData.length - 1];
-            const lineColor = endVal >= 0 ? GREEN : RED;
-            const points = cumData.map((v: number, i: number) => {
-              const x = (i / (cumData.length - 1)) * cW;
-              const y = cH - ((v - minV) / range) * (cH - 16) - 8;
-              return `${x.toFixed(1)},${y.toFixed(1)}`;
-            });
-            const linePath = `M${points.join(" L")}`;
-            const fillPath = `${linePath} L${cW},${zeroY} L0,${zeroY} Z`;
+            const totalRet = cumData.length > 0 ? cumData[cumData.length - 1] : 0;
+            const wins = pairRets.filter((r: number) => r > 0).length;
+            const winRate = pairRets.length > 0 ? (wins / pairRets.length * 100) : 0;
+            const meanRet = pairRets.length > 0 ? pairRets.reduce((s: number, r: number) => s + r, 0) / pairRets.length : 0;
+            const stdRet = pairRets.length > 1 ? Math.sqrt(pairRets.reduce((s: number, r: number) => s + (r - meanRet) ** 2, 0) / pairRets.length) : 0;
+            const sharpe = stdRet > 0 ? (meanRet / stdRet) * Math.sqrt(252) : 0;
+            const grossWin = pairRets.filter((r: number) => r > 0).reduce((s: number, r: number) => s + r, 0);
+            const grossLoss = Math.abs(pairRets.filter((r: number) => r < 0).reduce((s: number, r: number) => s + r, 0));
+            const pf = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? 999 : 0;
+            const maxDD = (() => {
+              let peak = 0, dd = 0;
+              for (const v of cumData) { peak = Math.max(peak, v); dd = Math.min(dd, v - peak); }
+              return dd;
+            })();
+
+            // Chart
+            const cW = 300, cH = 130;
+            const lineColor = totalRet >= 0 ? GREEN : RED;
+            let curveD = "", areaD = "", zeroY = cH / 2;
+            if (cumData.length >= 2) {
+              const minV = Math.min(0, ...cumData);
+              const maxV = Math.max(0, ...cumData);
+              const range = maxV - minV || 1;
+              zeroY = cH - ((0 - minV) / range) * (cH - 16) - 8;
+              const pts = cumData.map((v: number, i: number) => {
+                const x = (i / (cumData.length - 1)) * cW;
+                const y = cH - ((v - minV) / range) * (cH - 16) - 8;
+                return { x, y };
+              });
+              curveD = pts.map((p: any, i: number) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+              areaD = `${curveD} L${cW},${zeroY} L0,${zeroY} Z`;
+            }
+
             return (
-              <div className="rounded-xl p-4 mb-4" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.08)" }}>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[11px] font-mono font-bold" style={{ color: GOLD }}>Hedged Equity Curve — {closedPairs.length} closed pairs</span>
-                  <span className="text-[14px] font-mono font-black tabular-nums" style={{ color: lineColor }}>
-                    {endVal >= 0 ? "+" : ""}{endVal.toFixed(1)}%
-                  </span>
+              <div className="rounded-xl overflow-hidden mb-4" style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${lineColor}25` }}>
+                <div className="flex">
+                  {/* Chart - left */}
+                  <div className="flex-1 p-3 pr-0 flex items-stretch">
+                    {cumData.length >= 2 ? (
+                      <svg viewBox={`0 0 ${cW} ${cH}`} preserveAspectRatio="none" className="w-full h-full" style={{ minHeight: 150 }}>
+                        <defs>
+                          <linearGradient id="grad-hedged" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor={lineColor} stopOpacity="0.2" />
+                            <stop offset="100%" stopColor={lineColor} stopOpacity="0.02" />
+                          </linearGradient>
+                        </defs>
+                        <line x1="0" y1={zeroY} x2={cW} y2={zeroY} stroke="rgba(255,255,255,0.08)" strokeWidth="1" strokeDasharray="4 4" />
+                        <path d={areaD} fill="url(#grad-hedged)" />
+                        <path d={curveD} fill="none" stroke={lineColor} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+                        {cumData.length > 0 && (() => {
+                          const minV = Math.min(0, ...cumData);
+                          const maxV = Math.max(0, ...cumData);
+                          const range = maxV - minV || 1;
+                          const endY = cH - ((totalRet - minV) / range) * (cH - 16) - 8;
+                          return <circle cx={cW} cy={endY} r="3" fill={lineColor} />;
+                        })()}
+                      </svg>
+                    ) : (
+                      <div className="flex items-center justify-center w-full" style={{ minHeight: 150 }}>
+                        <span className="text-[10px] font-mono" style={{ color: "rgba(255,255,255,0.4)" }}>No closed pairs yet</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Stats - right */}
+                  <div className="shrink-0 p-3 pl-2 flex flex-col justify-between items-end">
+                    <div className="flex items-center gap-1.5 mb-2.5">
+                      <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold" style={{ background: `${GOLD}15`, color: GOLD }}>HEDGED</span>
+                      <span className="text-[10px] font-mono text-white/80">Pairs</span>
+                    </div>
+
+                    <div className="w-full mb-1">
+                      <div className="flex items-baseline gap-1.5">
+                        <span className="text-[8px] font-mono text-white/65 w-[38px] text-right">closed</span>
+                        <span className="text-[11px] font-mono font-bold text-white/85 tabular-nums">{closedPairs.length}</span>
+                        <span className="text-[14px] font-mono font-black tabular-nums leading-tight ml-auto" style={{ color: totalRet >= 0 ? GREEN : RED }}>
+                          {totalRet >= 0 ? "+" : ""}{totalRet.toFixed(2)}%
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="w-full mb-2.5" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: 8 }}>
+                      <div className="flex items-baseline gap-1.5">
+                        <span className="text-[8px] font-mono text-white/65 w-[38px] text-right">open</span>
+                        <span className="text-[11px] font-mono font-bold text-white/85 tabular-nums">{openPairs.length}</span>
+                        <span className="text-[11px] font-mono text-white/80 ml-auto">—</span>
+                      </div>
+                    </div>
+
+                    <div className="w-full space-y-0.5">
+                      {[
+                        { l: "Win", v: `${winRate.toFixed(0)}%` },
+                        { l: "Sharpe", v: sharpe.toFixed(2) },
+                        { l: "Avg", v: `${meanRet >= 0 ? "+" : ""}${meanRet.toFixed(3)}%` },
+                        { l: "PF", v: pf > 10 ? ">10" : pf.toFixed(2) },
+                        { l: "MaxDD", v: `${maxDD.toFixed(1)}%` },
+                        { l: "Unprd", v: `${hedgedData.stats?.unpaired_count ?? 0}` },
+                      ].map(s => (
+                        <div key={s.l} className="flex items-baseline gap-1.5">
+                          <span className="text-[8px] font-mono uppercase tracking-wider text-white/65 w-[38px] text-right">{s.l}</span>
+                          <span className="text-[11px] font-mono font-bold text-white/75 tabular-nums">{s.v}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
-                <svg viewBox={`0 0 ${cW} ${cH}`} className="w-full" style={{ height: 160 }}>
-                  <line x1="0" y1={zeroY} x2={cW} y2={zeroY} stroke="rgba(255,255,255,0.08)" strokeWidth="1" strokeDasharray="4 4" />
-                  <path d={fillPath} fill={lineColor === GREEN ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)"} />
-                  <path d={linePath} fill="none" stroke={lineColor} strokeWidth="2" />
-                  <circle
-                    cx={cW}
-                    cy={cH - ((endVal - minV) / range) * (cH - 16) - 8}
-                    r="4" fill={lineColor}
-                  />
-                </svg>
               </div>
             );
           })()}
