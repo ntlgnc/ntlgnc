@@ -1215,38 +1215,57 @@ export default function SignalsPage() {
       {/* ── Hedged Pairs View ── */}
       {viewMode === "hedged" && (
         <div className="mb-6">
-          {/* Hedged equity chart + stats card — same layout as unhedged cards */}
+          {/* Hedged equity charts — one per timeframe */}
           {hedgedData?.pairs && (() => {
-            const closedPairs = hedgedData.pairs
+            // Determine timeframe for each pair from barMinutes
+            const getPairTf = (p: any): string => {
+              const bm = p.legA?.barMinutes || p.legB?.barMinutes;
+              if (bm && bm >= 1440) return "1D";
+              if (bm && bm >= 60) return "1H";
+              if (bm && bm <= 1) return "1m";
+              return "ALL";
+            };
+
+            const tfConfigs = [
+              { key: "1D", label: "1D", color: GOLD },
+              { key: "1H", label: "1H", color: "#a78bfa" },
+              { key: "1m", label: "1M", color: "#3b82f6" },
+              { key: "ALL", label: "ALL", color: "rgba(255,255,255,0.6)" },
+            ];
+
+            // Group pairs by timeframe
+            const pairsByTf: Record<string, any[]> = {};
+            for (const p of hedgedData.pairs) {
+              const tf = getPairTf(p);
+              if (!pairsByTf[tf]) pairsByTf[tf] = [];
+              pairsByTf[tf].push(p);
+            }
+            // If everything is in ALL (no barMinutes data), just show one card
+            const activeTfs = tfConfigs.filter(tc => (pairsByTf[tc.key]?.length || 0) > 0);
+            if (activeTfs.length === 0) return null;
+
+            // Helper to build one card
+            const buildCard = (tfPairs: any[], label: string, color: string) => {
+            const closedPairs = tfPairs
               .filter((p: any) => p.status === "closed" && p.pair_return != null)
               .sort((a: any, b: any) => new Date(a.legA.createdAt).getTime() - new Date(b.legA.createdAt).getTime());
-            const openPairs = hedgedData.pairs.filter((p: any) => p.status === "open");
+            const openPairs = tfPairs.filter((p: any) => p.status === "open");
             const pairRets = closedPairs.map((p: any) => +p.pair_return);
 
-            // Compute unrealised returns for open pairs using live prices
             let openPairPnL = 0;
             const openPairReturns: number[] = [];
             for (const p of openPairs) {
               let legAret = 0, legBret = 0, hasData = false;
               const cpA = prices[p.legA?.symbol];
               const cpB = prices[p.legB?.symbol];
-              if (cpA && p.legA?.entryPrice) {
-                legAret = p.legA.direction === "LONG" ? (cpA / p.legA.entryPrice - 1) * 100 : (p.legA.entryPrice / cpA - 1) * 100;
-                hasData = true;
-              }
-              if (cpB && p.legB?.entryPrice) {
-                legBret = p.legB.direction === "LONG" ? (cpB / p.legB.entryPrice - 1) * 100 : (p.legB.entryPrice / cpB - 1) * 100;
-                hasData = true;
-              }
-              if (hasData) { const pRet = legAret + legBret; openPairPnL += pRet; openPairReturns.push(pRet); }
+              if (cpA && p.legA?.entryPrice) { legAret = p.legA.direction === "LONG" ? (cpA / p.legA.entryPrice - 1) * 100 : (p.legA.entryPrice / cpA - 1) * 100; hasData = true; }
+              if (cpB && p.legB?.entryPrice) { legBret = p.legB.direction === "LONG" ? (cpB / p.legB.entryPrice - 1) * 100 : (p.legB.entryPrice / cpB - 1) * 100; hasData = true; }
+              if (hasData) { openPairPnL += legAret + legBret; openPairReturns.push(legAret + legBret); }
             }
 
             let cum = 0;
             const cumData = closedPairs.map((p: any) => { cum += p.pair_return; return cum; });
-            // Append unrealised as the last point on the curve
-            if (openPairReturns.length > 0 && cumData.length > 0) {
-              cumData.push(cum + openPairPnL);
-            }
+            if (openPairReturns.length > 0 && cumData.length > 0) { cumData.push(cum + openPairPnL); }
             const closedRet = pairRets.reduce((s: number, r: number) => s + r, 0);
             const totalRet = closedRet + openPairPnL;
             const wins = pairRets.filter((r: number) => r > 0).length;
@@ -1257,114 +1276,79 @@ export default function SignalsPage() {
             const grossWin = pairRets.filter((r: number) => r > 0).reduce((s: number, r: number) => s + r, 0);
             const grossLoss = Math.abs(pairRets.filter((r: number) => r < 0).reduce((s: number, r: number) => s + r, 0));
             const pf = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? 999 : 0;
-            const maxDD = (() => {
-              let peak = 0, dd = 0;
-              for (const v of cumData) { peak = Math.max(peak, v); dd = Math.min(dd, v - peak); }
-              return dd;
-            })();
+            const maxDD = (() => { let peak = 0, dd = 0; for (const v of cumData) { peak = Math.max(peak, v); dd = Math.min(dd, v - peak); } return dd; })();
 
-            // Chart — use padding so end dot isn't clipped
             const cW = 290, cH = 130, pad = 10;
             const lineColor = totalRet >= 0 ? GREEN : RED;
             let curveD = "", areaD = "", zeroY = cH / 2;
             if (cumData.length >= 2) {
-              const minV = Math.min(0, ...cumData);
-              const maxV = Math.max(0, ...cumData);
-              const range = maxV - minV || 1;
+              const minV = Math.min(0, ...cumData); const maxV = Math.max(0, ...cumData); const range = maxV - minV || 1;
               zeroY = cH - ((0 - minV) / range) * (cH - 16) - 8;
-              const pts = cumData.map((v: number, i: number) => {
-                const x = pad + (i / (cumData.length - 1)) * (cW - pad * 2);
-                const y = cH - ((v - minV) / range) * (cH - 16) - 8;
-                return { x, y };
-              });
+              const pts = cumData.map((v: number, i: number) => ({ x: pad + (i / (cumData.length - 1)) * (cW - pad * 2), y: cH - ((v - minV) / range) * (cH - 16) - 8 }));
               curveD = pts.map((p: any, i: number) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-              const lastX = pts[pts.length - 1].x;
-              areaD = `${curveD} L${lastX.toFixed(1)},${zeroY} L${pad},${zeroY} Z`;
+              areaD = `${curveD} L${pts[pts.length - 1].x.toFixed(1)},${zeroY} L${pad},${zeroY} Z`;
             }
 
             return (
-              <div className="flex gap-3 mb-4 flex-wrap">
-                <div className="flex-1 min-w-[320px] rounded-xl overflow-hidden" style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${lineColor}25` }}>
-                  <div className="flex">
-                    {/* Chart - left */}
-                    <div className="flex-1 p-3 pr-0 flex items-stretch">
-                      {cumData.length >= 2 ? (
-                        <svg viewBox={`0 0 ${cW} ${cH}`} preserveAspectRatio="none" className="w-full h-full" style={{ minHeight: 120 }}>
-                          <defs>
-                            <linearGradient id="grad-hedged" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="0%" stopColor={lineColor} stopOpacity="0.2" />
-                              <stop offset="100%" stopColor={lineColor} stopOpacity="0.02" />
-                            </linearGradient>
-                          </defs>
-                          <line x1={pad} y1={zeroY} x2={cW - pad} y2={zeroY} stroke="rgba(255,255,255,0.08)" strokeWidth="1" strokeDasharray="4 4" />
-                          <path d={areaD} fill="url(#grad-hedged)" />
-                          <path d={curveD} fill="none" stroke={lineColor} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-                          {cumData.length > 0 && (() => {
-                            const minV = Math.min(0, ...cumData);
-                            const maxV = Math.max(0, ...cumData);
-                            const range = maxV - minV || 1;
-                            const endX = pad + ((cumData.length - 1) / (cumData.length - 1)) * (cW - pad * 2);
-                            const endY = cH - ((totalRet - minV) / range) * (cH - 16) - 8;
-                            return <circle cx={endX} cy={endY} r="3" fill={lineColor} />;
-                          })()}
-                        </svg>
-                      ) : (
-                        <div className="flex items-center justify-center w-full" style={{ minHeight: 120 }}>
-                          <span className="text-[10px] font-mono" style={{ color: "rgba(255,255,255,0.4)" }}>No closed pairs yet</span>
-                        </div>
-                      )}
+              <div key={label} className="flex-1 min-w-[320px] rounded-xl overflow-hidden" style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${color}25` }}>
+                <div className="flex">
+                  <div className="flex-1 p-3 pr-0 flex items-stretch">
+                    {cumData.length >= 2 ? (
+                      <svg viewBox={`0 0 ${cW} ${cH}`} preserveAspectRatio="none" className="w-full h-full" style={{ minHeight: 120 }}>
+                        <defs><linearGradient id={`grad-h-${label}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={lineColor} stopOpacity="0.2" /><stop offset="100%" stopColor={lineColor} stopOpacity="0.02" /></linearGradient></defs>
+                        <line x1={pad} y1={zeroY} x2={cW - pad} y2={zeroY} stroke="rgba(255,255,255,0.08)" strokeWidth="1" strokeDasharray="4 4" />
+                        <path d={areaD} fill={`url(#grad-h-${label})`} />
+                        <path d={curveD} fill="none" stroke={lineColor} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+                        {(() => { const minV = Math.min(0, ...cumData); const maxV = Math.max(0, ...cumData); const range = maxV - minV || 1; const endX = pad + (cW - pad * 2); const endY = cH - ((cumData[cumData.length - 1] - minV) / range) * (cH - 16) - 8; return <circle cx={endX} cy={endY} r="3" fill={lineColor} />; })()}
+                      </svg>
+                    ) : (
+                      <div className="flex items-center justify-center w-full" style={{ minHeight: 120 }}><span className="text-[10px] font-mono" style={{ color: "rgba(255,255,255,0.4)" }}>No closed pairs</span></div>
+                    )}
+                  </div>
+                  <div className="shrink-0 p-3 pl-2 flex flex-col justify-between items-end">
+                    <div className="flex items-center gap-1.5 mb-2.5">
+                      <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold" style={{ background: `${color}15`, color }}>{label}</span>
+                      <span className="text-[10px] font-mono text-white/80">Hedged</span>
                     </div>
-
-                    {/* Stats - right */}
-                    <div className="shrink-0 p-3 pl-2 flex flex-col justify-between items-end">
-                      <div className="flex items-center gap-1.5 mb-2.5">
-                        <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold" style={{ background: `${GOLD}15`, color: GOLD }}>HEDGED</span>
-                        <span className="text-[10px] font-mono text-white/80">Pairs</span>
-                      </div>
-
-                      <div className="w-full mb-1">
-                        <div className="flex items-baseline gap-1.5">
-                          <span className="text-[8px] font-mono text-white/65 w-[34px] text-right">closed</span>
-                          <span className="text-[11px] font-mono font-bold text-white/85 tabular-nums">{closedPairs.length}</span>
-                          <span className="text-[14px] font-mono font-black tabular-nums leading-tight ml-auto" style={{ color: totalRet >= 0 ? GREEN : RED }}>
-                            {totalRet >= 0 ? "+" : ""}{totalRet.toFixed(2)}%
-                          </span>
+                    <div className="w-full mb-1"><div className="flex items-baseline gap-1.5">
+                      <span className="text-[8px] font-mono text-white/65 w-[34px] text-right">closed</span>
+                      <span className="text-[11px] font-mono font-bold text-white/85 tabular-nums">{closedPairs.length}</span>
+                      <span className="text-[14px] font-mono font-black tabular-nums leading-tight ml-auto" style={{ color: totalRet >= 0 ? GREEN : RED }}>{totalRet >= 0 ? "+" : ""}{totalRet.toFixed(2)}%</span>
+                    </div></div>
+                    <div className="w-full mb-2.5" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: 8 }}><div className="flex items-baseline gap-1.5">
+                      <span className="text-[8px] font-mono text-white/65 w-[34px] text-right">open</span>
+                      <span className="text-[11px] font-mono font-bold text-white/85 tabular-nums">{openPairs.length}</span>
+                      {openPairReturns.length > 0 ? (
+                        <span className="text-[12px] font-mono font-bold tabular-nums leading-tight ml-auto" style={{ color: openPairPnL >= 0 ? GREEN : RED }}>{openPairPnL >= 0 ? "+" : ""}{openPairPnL.toFixed(2)}%</span>
+                      ) : (<span className="text-[11px] font-mono text-white/80 ml-auto">—</span>)}
+                    </div></div>
+                    <div className="w-full space-y-0.5">
+                      {[
+                        { l: "Win", v: `${winRate.toFixed(0)}%` },
+                        { l: "Sharpe", v: sharpe.toFixed(2) },
+                        { l: "Avg", v: `${meanRet >= 0 ? "+" : ""}${meanRet.toFixed(3)}%` },
+                        { l: "PF", v: pf > 10 ? ">10" : pf.toFixed(2) },
+                        { l: "MaxDD", v: `${maxDD.toFixed(1)}%` },
+                      ].map(s => (
+                        <div key={s.l} className="flex items-baseline gap-1.5">
+                          <span className="text-[8px] font-mono uppercase tracking-wider text-white/65 w-[34px] text-right">{s.l}</span>
+                          <span className="text-[11px] font-mono font-bold text-white/75 tabular-nums">{s.v}</span>
                         </div>
-                      </div>
-
-                      <div className="w-full mb-2.5" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: 8 }}>
-                        <div className="flex items-baseline gap-1.5">
-                          <span className="text-[8px] font-mono text-white/65 w-[34px] text-right">open</span>
-                          <span className="text-[11px] font-mono font-bold text-white/85 tabular-nums">{openPairs.length}</span>
-                          {openPairReturns.length > 0 ? (
-                            <span className="text-[12px] font-mono font-bold tabular-nums leading-tight ml-auto"
-                              style={{ color: openPairPnL >= 0 ? GREEN : RED }}>
-                              {openPairPnL >= 0 ? "+" : ""}{openPairPnL.toFixed(2)}%
-                            </span>
-                          ) : (
-                            <span className="text-[11px] font-mono text-white/80 ml-auto">—</span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="w-full space-y-0.5">
-                        {[
-                          { l: "Win", v: `${winRate.toFixed(0)}%` },
-                          { l: "Sharpe", v: sharpe.toFixed(2) },
-                          { l: "Avg", v: `${meanRet >= 0 ? "+" : ""}${meanRet.toFixed(3)}%` },
-                          { l: "PF", v: pf > 10 ? ">10" : pf.toFixed(2) },
-                          { l: "MaxDD", v: `${maxDD.toFixed(1)}%` },
-                          { l: "Unprd", v: `${hedgedData.stats?.unpaired_count ?? 0}` },
-                        ].map(s => (
-                          <div key={s.l} className="flex items-baseline gap-1.5">
-                            <span className="text-[8px] font-mono uppercase tracking-wider text-white/65 w-[34px] text-right">{s.l}</span>
-                            <span className="text-[11px] font-mono font-bold text-white/75 tabular-nums">{s.v}</span>
-                          </div>
-                        ))}
-                      </div>
+                      ))}
                     </div>
                   </div>
                 </div>
+              </div>
+            );
+            }; // end buildCard
+
+            return (
+              <div className="flex gap-3 mb-4 flex-wrap">
+                {activeTfs.map(tc => {
+                  const tfPairs = pairsByTf[tc.key] || [];
+                  if (tfPairs.length === 0) return null;
+                  return buildCard(tfPairs, tc.label, tc.color);
+                })}
               </div>
             );
           })()}
