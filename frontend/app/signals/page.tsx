@@ -281,10 +281,10 @@ function MiniEquityCurve({ label, signals, color, prices, filters, timeWindow }:
                   r="3" fill={lineColor}
                 />
               )}
-              {/* End value label */}
+              {/* End value label — top left, away from the curve */}
               <text
-                x={W - 4} y={12}
-                textAnchor="end" fill={lineColor}
+                x={4} y={12}
+                textAnchor="start" fill={lineColor}
                 fontSize="10" fontFamily="monospace" fontWeight="bold"
               >{endVal >= 0 ? "+" : ""}{endVal.toFixed(1)}%</text>
             </svg>

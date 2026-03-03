@@ -183,10 +183,23 @@ export async function GET(req: NextRequest) {
       const prices: Record<string, number> = {};
       for (const symbol of symbols.slice(0, 50)) {
         try {
-          const r = await pool.query(
+          // Try 1m first (most recent), fall back to 1h, then 1d
+          let r = await pool.query(
             `SELECT close FROM "Candle1m" WHERE symbol = $1 ORDER BY timestamp DESC LIMIT 1`,
             [symbol]
           );
+          if (!r.rows[0]) {
+            r = await pool.query(
+              `SELECT close FROM "Candle1h" WHERE symbol = $1 ORDER BY timestamp DESC LIMIT 1`,
+              [symbol]
+            );
+          }
+          if (!r.rows[0]) {
+            r = await pool.query(
+              `SELECT close FROM "Candle1d" WHERE symbol = $1 ORDER BY timestamp DESC LIMIT 1`,
+              [symbol]
+            );
+          }
           if (r.rows[0]) prices[symbol] = parseFloat(r.rows[0].close);
         } catch {}
       }
