@@ -254,11 +254,25 @@ export default function HedgedBacktestDashboard() {
                       <path d={fillPath} fill={`${tf.color}10`} />
                       {/* Line */}
                       <path d={linePath} fill="none" stroke={tf.color} strokeWidth="1.5" />
+                      {/* Data point dots with tooltips */}
+                      {points.map((p, i) => (
+                        <circle key={i} cx={p.x} cy={p.y} r="3" fill={tf.color} opacity="0" style={{ cursor: "pointer" }}>
+                          <title>{`Cycle ${p.r.cycle}: SR=${p.r.oos_sharpe.toFixed(2)} | WR=${p.r.oos_win_rate?.toFixed(1) ?? '?'}% | ${p.r.oos_trade_count} pairs | ${p.r.oos_avg_ret_bps ?? 0}bps | t=${p.r.oos_t_stat?.toFixed(1) ?? '?'} p=${p.r.oos_p_value < 0.001 ? '<.001' : p.r.oos_p_value?.toFixed(3) ?? '?'}`}</title>
+                        </circle>
+                      ))}
+                      {/* Hover hit areas — wider invisible rects for easier hovering */}
+                      {points.map((p, i) => (
+                        <rect key={`h${i}`} x={p.x - 6} y={0} width={12} height={cH} fill="transparent" style={{ cursor: "pointer" }}>
+                          <title>{`Cycle ${p.r.cycle}: SR=${p.r.oos_sharpe.toFixed(2)} | WR=${p.r.oos_win_rate?.toFixed(1) ?? '?'}% | ${p.r.oos_trade_count} pairs | ${p.r.oos_avg_ret_bps ?? 0}bps`}</title>
+                        </rect>
+                      ))}
                       {/* Peak dot */}
                       {peak && (() => {
                         const px = pad + ((peak.cycle - minCyc) / cycRange) * chartW;
                         const py = 10 + chartH / 2 - (peak.oos_sharpe / maxSR) * (chartH / 2);
-                        return <circle cx={px} cy={py} r="4" fill={GREEN} />;
+                        return <circle cx={px} cy={py} r="4" fill={GREEN}>
+                          <title>{`PEAK — Cycle ${peak.cycle}: SR=${peak.oos_sharpe.toFixed(2)} | WR=${peak.oos_win_rate?.toFixed(1)}% | ${peak.oos_trade_count} pairs`}</title>
+                        </circle>;
                       })()}
                     </svg>
                   </div>
