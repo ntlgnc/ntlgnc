@@ -134,6 +134,66 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    if (action === "hedged-stats") {
+      const period = searchParams.get("period") || "24h";
+      const intervals: Record<string, string> = {
+        "24h": "1 day", "1w": "7 days", "1m": "30 days",
+      };
+      const interval = intervals[period] || "1 day";
+
+      // Closed hedged pairs in period
+      const { rows: pairRows } = await pool.query(`
+        SELECT s.pair_return
+        FROM "FracmapSignal" s
+        WHERE s.pair_id IS NOT NULL AND s.pair_return IS NOT NULL
+          AND s.status = 'closed' AND s."closedAt" > NOW() - INTERVAL '${interval}'
+          AND s.pair_return != 0
+      `);
+      // Deduplicate by taking one leg per pair (pair_return is stored on both legs)
+      const seen = new Set<number>();
+      const pairReturns: number[] = [];
+      for (const r of pairRows) {
+        const ret = parseFloat(r.pair_return);
+        if (!seen.has(ret * 10000)) { // simple dedup
+          seen.add(ret * 10000);
+          pairReturns.push(ret);
+        }
+      }
+      // More robust: query distinct pair_ids
+      const { rows: distinctPairs } = await pool.query(`
+        SELECT DISTINCT ON (pair_id) pair_id, pair_return
+        FROM "FracmapSignal"
+        WHERE pair_id IS NOT NULL AND pair_return IS NOT NULL
+          AND status = 'closed' AND "closedAt" > NOW() - INTERVAL '${interval}'
+      `);
+      const hedgedReturns = distinctPairs.map((r: any) => parseFloat(r.pair_return) || 0);
+      const cumReturn = hedgedReturns.reduce((s: number, r: number) => s + r, 0);
+      const wins = hedgedReturns.filter((r: number) => r > 0).length;
+      const winRate = hedgedReturns.length > 0 ? (wins / hedgedReturns.length * 100) : 0;
+      const mean = hedgedReturns.length > 0 ? cumReturn / hedgedReturns.length : 0;
+      const std = hedgedReturns.length > 1 ? Math.sqrt(hedgedReturns.reduce((a: number, b: number) => a + (b - mean) ** 2, 0) / hedgedReturns.length) : 0;
+      const sharpe = std > 0 ? (mean / std) * Math.sqrt(252) : 0;
+
+      // Open hedged pairs
+      const { rows: openPairs } = await pool.query(`
+        SELECT DISTINCT ON (pair_id) pair_id
+        FROM "FracmapSignal"
+        WHERE pair_id IS NOT NULL AND status = 'open'
+      `);
+
+      return NextResponse.json({
+        hedgedStats: {
+          period,
+          closedPairs: hedgedReturns.length,
+          wins,
+          cumReturn: Math.round(cumReturn * 1000) / 1000,
+          winRate: Math.round(winRate * 10) / 10,
+          sharpe: Math.round(sharpe * 100) / 100,
+          openPairs: openPairs.length,
+        }
+      });
+    }
+
     if (action === "showcase") {
       // FIXED: Added directional consistency check.
       // A profitable LONG must have exitPrice > entryPrice.
@@ -298,15 +358,16 @@ export async function GET(req: NextRequest) {
       const isAll = timeframe === "ALL";
       const interval = intervals[timeframe] || "1 day";
 
-      // Fetch signals from ACTIVE strategies only — exclude 'filtered' and inactive strategy signals
+      // Fetch signals — include those from active strategies AND those with no strategy (defaults)
       const r = await pool.query(`
         SELECT s.id, s.symbol, s.direction, s."entryPrice", s."exitPrice",
                s."returnPct", s.status, s."createdAt", s."closedAt", s."holdBars", s."strategyId",
                s.pair_id, s.pair_symbol, s.pair_direction, s.pair_return,
                st."barMinutes"
         FROM "FracmapSignal" s
-        JOIN "FracmapStrategy" st ON s."strategyId" = st.id
-        WHERE s.status IN ('open', 'closed') AND st.active = true
+        LEFT JOIN "FracmapStrategy" st ON s."strategyId" = st.id
+        WHERE s.status IN ('open', 'closed')
+          AND (st.active = true OR s."strategyId" IS NULL)
         ${isAll ? '' : `AND s."createdAt" > NOW() - INTERVAL '${interval}'`}
         ORDER BY s."createdAt" DESC
       `);
@@ -320,15 +381,16 @@ export async function GET(req: NextRequest) {
       };
       const interval = intervals[timeframe] || "7 days";
 
-      // Get paired signals from ACTIVE strategies only
+      // Get paired signals
       const { rows: pairedSignals } = await pool.query(`
         SELECT s.id, s.symbol, s.direction, s."entryPrice", s."exitPrice",
                s."returnPct", s.status, s."createdAt", s."closedAt", s."holdBars", s."strategyId",
                s.pair_id, s.pair_symbol, s.pair_direction, s.pair_return,
                st."barMinutes"
         FROM "FracmapSignal" s
-        JOIN "FracmapStrategy" st ON s."strategyId" = st.id
-        WHERE s.pair_id IS NOT NULL AND s.status IN ('open', 'closed') AND st.active = true
+        LEFT JOIN "FracmapStrategy" st ON s."strategyId" = st.id
+        WHERE s.pair_id IS NOT NULL AND s.status IN ('open', 'closed')
+          AND (st.active = true OR s."strategyId" IS NULL)
         AND s."createdAt" > NOW() - INTERVAL '${interval}'
         ORDER BY s."createdAt" DESC
       `);
@@ -359,14 +421,15 @@ export async function GET(req: NextRequest) {
         new Date(b.legA.createdAt).getTime() - new Date(a.legA.createdAt).getTime()
       );
 
-      // Get unpaired signals from ACTIVE strategies only
+      // Get unpaired signals
       const { rows: unpaired } = await pool.query(`
         SELECT s.id, s.symbol, s.direction, s."entryPrice", s."exitPrice",
                s."returnPct", s.status, s."createdAt", s."closedAt", s."holdBars",
                st."barMinutes"
         FROM "FracmapSignal" s
-        JOIN "FracmapStrategy" st ON s."strategyId" = st.id
-        WHERE s.pair_id IS NULL AND s.status IN ('open', 'closed') AND st.active = true
+        LEFT JOIN "FracmapStrategy" st ON s."strategyId" = st.id
+        WHERE s.pair_id IS NULL AND s.status IN ('open', 'closed')
+          AND (st.active = true OR s."strategyId" IS NULL)
         AND s."createdAt" > NOW() - INTERVAL '${interval}'
         ORDER BY s."createdAt" DESC
       `);

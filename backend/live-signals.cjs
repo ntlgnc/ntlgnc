@@ -18,6 +18,7 @@ const { Client, Pool } = require('pg');
 const { checkMatrix } = require('./filter-matrix-check.cjs');
 const { checkCoinQuality, invalidateCoinCache } = require('./coin-quality-gate.cjs');
 const { ensureCoinStrategyTables, getActiveCoinStrategies, invalidateCoinStrategyCache } = require('./coin-strategy-manager.cjs');
+const { tweetSignal } = require('./tweet-signal.cjs');
 
 const DB_URL = process.env.DATABASE_URL;
 const pool = new Pool({ connectionString: DB_URL, max: 20 });
@@ -85,6 +86,15 @@ function computeFracmap(highs, lows, cycle, order) {
 // ═══════════════════════════════════════════════════════════════
 
 function detectSignalAtBar(bars, allBands, i, strategy) {
+  // ═══ CORRECTED: Original design + scanner improvements ═══
+  // Touch: pierce-and-close (reversal confirmation)
+  // Near-miss: temporal (x-axis, check prev bar) — no look-ahead bias because bands are lagged
+  // Spike/cusp: isLocalMax on lower band (spike up), isLocalMin on upper band (spike down)
+  //             Always applied. Window = cycle/6. Can look forward because bands are lagged.
+  // PriceExtreme: per-band with cycle/6 window (from scanner, more principled)
+  // Combined spike: reject mixed long+short votes (when spikeFilter enabled)
+  // Strength: direction-specific (longVotes or shortVotes individually vs minStr)
+  // holdBars: floor of 3
   const { minStr, minCyc, spike: spikeFilter, nearMiss, priceExt: priceExtreme, holdDiv } = strategy;
 
   function isLocalMax(arr, idx, w) {
@@ -114,70 +124,61 @@ function detectSignalAtBar(bars, allBands, i, strategy) {
     return true;
   }
 
-  let buyStrength = 0, sellStrength = 0, maxBuyCycle = 0, maxSellCycle = 0;
-  let maxBuyOrder = 0, maxSellOrder = 0;
+  let longVotes = 0, shortVotes = 0, maxCyc = 0, maxOrd = 0;
 
   for (const band of allBands) {
-    const lo = band.lower[i], up = band.upper[i];
-    if (lo === null || up === null || up <= lo) continue;
-    const bandWidth = (up - lo) / ((up + lo) / 2);
-    if (bandWidth < 0.0001) continue;
-    const sw = Math.round(band.cycle / 3);
+    const lo = band.lower, up = band.upper;
+    const w = Math.max(2, Math.round(band.cycle / 6));
 
-    const buyAtI = bars[i].low < lo && bars[i].close > lo;
-    const buyNear = nearMiss && !buyAtI && (i > 0 && band.lower[i-1] !== null &&
-      bars[i-1].low < band.lower[i-1] && bars[i-1].close > band.lower[i-1]);
-
-    if (buyAtI || buyNear) {
-      if (spikeFilter) {
-        const sH = isLocalMax(band.lower, i, sw);
-        const sN = nearMiss && (isLocalMax(band.lower, i-1, sw) || isLocalMax(band.lower, i+1, sw));
-        if (!sH && !sN) continue;
+    // Long: pierce-and-close on lower band + cusp (isLocalMax = spike up) + priceExtreme
+    if (lo[i] !== null) {
+      const pierce = bars[i].low < lo[i] && bars[i].close > lo[i];
+      const nearTemporal = nearMiss && !pierce && (i > 0 && lo[i-1] !== null &&
+        bars[i-1].low < lo[i-1] && bars[i-1].close > lo[i-1]);
+      const cusp = isLocalMax(lo, i, w);
+      if ((pierce || nearTemporal) && cusp) {
+        if (priceExtreme && !isPriceLow(i, w)) { /* skip */ } else {
+          longVotes++;
+          if (band.cycle > maxCyc) { maxCyc = band.cycle; maxOrd = band.order; }
+        }
       }
-      buyStrength++;
-      if (band.cycle > maxBuyCycle) maxBuyCycle = band.cycle;
-      if (band.order > maxBuyOrder) maxBuyOrder = band.order;
     }
 
-    const sellAtI = bars[i].high > up && bars[i].close < up;
-    const sellNear = nearMiss && !sellAtI && (i > 0 && band.upper[i-1] !== null &&
-      bars[i-1].high > band.upper[i-1] && bars[i-1].close < band.upper[i-1]);
-
-    if (sellAtI || sellNear) {
-      if (spikeFilter) {
-        const sH = isLocalMin(band.upper, i, sw);
-        const sN = nearMiss && (isLocalMin(band.upper, i-1, sw) || isLocalMin(band.upper, i+1, sw));
-        if (!sH && !sN) continue;
+    // Short: pierce-and-close on upper band + cusp (isLocalMin = spike down) + priceExtreme
+    if (up[i] !== null) {
+      const pierce = bars[i].high > up[i] && bars[i].close < up[i];
+      const nearTemporal = nearMiss && !pierce && (i > 0 && up[i-1] !== null &&
+        bars[i-1].high > up[i-1] && bars[i-1].close < up[i-1]);
+      const cusp = isLocalMin(up, i, w);
+      if ((pierce || nearTemporal) && cusp) {
+        if (priceExtreme && !isPriceHigh(i, w)) { /* skip */ } else {
+          shortVotes++;
+          if (band.cycle > maxCyc) { maxCyc = band.cycle; maxOrd = band.order; }
+        }
       }
-      sellStrength++;
-      if (band.cycle > maxSellCycle) maxSellCycle = band.cycle;
-      if (band.order > maxSellOrder) maxSellOrder = band.order;
     }
   }
 
-  if (buyStrength >= minStr && maxBuyCycle >= minCyc && buyStrength >= sellStrength) {
-    if (priceExtreme && !isPriceLow(i, Math.round(maxBuyCycle / 2))) return null;
-    const holdBars = Math.round(maxBuyCycle / holdDiv);
-    // ALIGNED WITH SCANNER: entry at NEXT bar's open (not signal bar's close)
-    // The caller detects at bars[length-2], so bars[i+1] always exists
+  // Combined spike: reject mixed signals
+  if (spikeFilter && longVotes > 0 && shortVotes > 0) return null;
+
+  // Direction-specific strength check
+  if (longVotes >= minStr && maxCyc >= minCyc && longVotes >= shortVotes) {
+    const hold = Math.max(3, Math.round(maxCyc / holdDiv));
     return {
-      direction: 'LONG', strength: buyStrength,
-      maxCycle: maxBuyCycle, maxOrder: maxBuyOrder, holdBars,
+      direction: 'LONG', strength: longVotes,
+      maxCycle: maxCyc, maxOrder: maxOrd, holdBars: hold,
       entryPrice: (i + 1 < bars.length) ? bars[i + 1].open : bars[i].close,
     };
   }
-
-  if (sellStrength >= minStr && maxSellCycle >= minCyc) {
-    if (priceExtreme && !isPriceHigh(i, Math.round(maxSellCycle / 2))) return null;
-    const holdBars = Math.round(maxSellCycle / holdDiv);
-    // ALIGNED WITH SCANNER: entry at NEXT bar's open (not signal bar's close)
+  if (shortVotes >= minStr && maxCyc >= minCyc) {
+    const hold = Math.max(3, Math.round(maxCyc / holdDiv));
     return {
-      direction: 'SHORT', strength: sellStrength,
-      maxCycle: maxSellCycle, maxOrder: maxSellOrder, holdBars,
+      direction: 'SHORT', strength: shortVotes,
+      maxCycle: maxCyc, maxOrder: maxOrd, holdBars: hold,
       entryPrice: (i + 1 < bars.length) ? bars[i + 1].open : bars[i].close,
     };
   }
-
   return null;
 }
 
@@ -222,11 +223,18 @@ async function getExcludedCoins(client) {
 
 async function getOpenSignals(client, strategyId) {
   try {
-    const { rows } = await client.query(
-      `SELECT * FROM "FracmapSignal" WHERE "strategyId" = $1 AND status = 'open'`,
-      [strategyId]
-    );
-    return rows;
+    if (strategyId) {
+      const { rows } = await client.query(
+        `SELECT * FROM "FracmapSignal" WHERE "strategyId" = $1 AND status = 'open'`,
+        [strategyId]
+      );
+      return rows;
+    } else {
+      const { rows } = await client.query(
+        `SELECT * FROM "FracmapSignal" WHERE "strategyId" IS NULL AND status = 'open'`
+      );
+      return rows;
+    }
   } catch {
     return [];
   }
@@ -565,11 +573,13 @@ async function runTimeframeLoop(tfKey) {
         holdDiv: dbStrategy.holdDiv, priceExt: dbStrategy.priceExt ?? config.priceExt,
         cycleMin: dbStrategy.cycleMin ?? config.cycleMin,
         cycleMax: dbStrategy.cycleMax ?? config.cycleMax,
+        config: dbStrategy.config || {},
       } : {
         minStr: config.minStr, minCyc: config.minCyc,
         spike: config.spike, nearMiss: config.nearMiss,
         holdDiv: config.holdDiv, priceExt: config.priceExt,
         cycleMin: config.cycleMin, cycleMax: config.cycleMax,
+        config: { hedging_enabled: true, max_gap: 1, hedge_mode: 'exclusive' },
       };
 
       const strategyId = dbStrategy?.id || null;
@@ -591,8 +601,8 @@ async function runTimeframeLoop(tfKey) {
       const now = new Date().toLocaleTimeString('en-GB', { hour12: false });
       let newSignals = 0, closedSignals = 0, errors = 0;
 
-      // Get open signals to track for closing
-      const openSignals = strategyId ? await getOpenSignals(client, strategyId) : [];
+      // Get open signals to track for closing (handle both strategyId and null)
+      const openSignals = await getOpenSignals(client, strategyId);
       const openBySymbol = {};
       for (const s of openSignals) {
         if (!openBySymbol[s.symbol]) openBySymbol[s.symbol] = [];
@@ -793,6 +803,13 @@ async function runTimeframeLoop(tfKey) {
                signal.strength, signal.holdBars, signal.maxCycle, signal.maxOrder,
                JSON.stringify(regimeSnap)]
             );
+
+            // ── Tweet notification (fire-and-forget) ──
+            tweetSignal({
+              symbol, direction: signal.direction,
+              entryPrice: signal.entryPrice, strength: signal.strength,
+              timeframe: tfLabel, signalId: newSig?.id, regime: regimeSnap
+            }).catch(() => {});
 
             // ── Hedge pairing: find opposite-direction signal to pair with ──
             if (strategy.config && strategy.config.hedging_enabled) {
@@ -1108,6 +1125,13 @@ async function start() {
                signal.strength, signal.holdBars, signal.maxCycle, signal.maxOrder,
                JSON.stringify(regimeSnap)]
             );
+
+            // ── Tweet notification (fire-and-forget) ──
+            tweetSignal({
+              symbol, direction: signal.direction,
+              entryPrice: signal.entryPrice, strength: signal.strength,
+              timeframe: tfLabel, signalId: null, regime: regimeSnap
+            }).catch(() => {});
           } catch (err) {
             // Don't crash the loop on individual tick errors
             if (!err.message?.includes('does not exist')) {
