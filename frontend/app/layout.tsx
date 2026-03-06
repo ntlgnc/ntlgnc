@@ -19,16 +19,18 @@ function Nav() {
   const links = [
     { href: "/", label: "Home" },
     { href: "/signals", label: "Signals" },
+    { href: "/regime", label: "Regime" },
+    { href: "/regime/scorecard", label: "Scorecard" },
+    { href: "/universe", label: "Universe" },
     { href: "/research", label: "Research" },
-    { href: "/pricing", label: "Pricing" },
+    // { href: "/pricing", label: "Pricing" }, // hidden — FSA compliance
   ];
 
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 border-b" style={{ background: "rgba(8,10,16,0.95)", borderColor: "rgba(212,168,67,0.1)", backdropFilter: "blur(12px)" }}>
       <div className="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2">
-          <span className="text-lg font-mono font-black tracking-tight" style={{ color: GOLD }}>NTLGNC</span>
-          <span className="text-[10px] font-mono uppercase tracking-widest text-white/70">Signal Lab</span>
+          <span className="text-xl font-mono font-black tracking-tight" style={{ color: GOLD }}>fracmap.com</span>
         </Link>
         <div className="flex items-center gap-5">
           {user ? (
@@ -63,7 +65,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <head>
-        <title>NTLGNC Signal Lab — AI-Powered Market Signals</title>
+        <title>FRACMAP Signal Lab — AI-Powered Market Signals</title>
         <meta name="description" content="Autonomous AI trading signals with verified real-time performance. Every signal published live — open, close, and result." />
       </head>
       <body className="bg-[#060810] text-white min-h-screen" style={{ fontFamily: "'JetBrains Mono', 'SF Mono', monospace" }}>

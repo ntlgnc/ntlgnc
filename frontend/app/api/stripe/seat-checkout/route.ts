@@ -45,7 +45,7 @@ export async function POST(req: Request) {
           currency: "usd",
           unit_amount: priceInCents,
           product_data: {
-            name: `NTLGNC Signal Seat — ${months} month${months > 1 ? "s" : ""}`,
+            name: `FRACMAP Signal Seat — ${months} month${months > 1 ? "s" : ""}`,
             description: `Real-time signal access for ${months} month${months > 1 ? "s" : ""}. Transferable on the marketplace.`,
           },
         },

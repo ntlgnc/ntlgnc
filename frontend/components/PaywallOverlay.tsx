@@ -11,6 +11,10 @@ import { useAuth } from "./AuthContext";
  * Blocks all interaction with underlying content.
  */
 export default function PaywallOverlay() {
+  // Paywall disabled — site is now a free marketing showcase (FSA compliance)
+  return null;
+
+  /* eslint-disable no-unreachable */
   const { user, startCheckout, setShowAuthModal } = useAuth();
 
   // Dev bypass — never block on localhost

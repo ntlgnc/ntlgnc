@@ -94,7 +94,7 @@ export function useFeed() {
   return ctx;
 }
 
-const LOCAL_KEY = "ntlgnc_feed";
+const LOCAL_KEY = "fracmap_feed";
 
 function loadLocal(): FeedItem[] {
   if (typeof window === "undefined") return [];

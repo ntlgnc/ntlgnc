@@ -1,6 +1,6 @@
 export const metadata = {
-  title: "Privacy Policy — ntlgnc",
-  description: "ntlgnc privacy policy — how we collect, use, and safeguard your data.",
+  title: "Privacy Policy — fracmap",
+  description: "fracmap privacy policy — how we collect, use, and safeguard your data.",
 };
 
 export default function PrivacyPage() {
@@ -9,7 +9,7 @@ export default function PrivacyPage() {
       <header className="border-b border-line">
         <div className="max-w-3xl mx-auto px-6 py-4 flex items-center justify-between">
           <a href="/" className="inline-block">
-            <svg viewBox="0 0 320 64" fill="none" xmlns="http://www.w3.org/2000/svg" className="h-[36px] w-auto"><defs><linearGradient id="lgGlow" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#f97316"/><stop offset="100%" stopColor="#fb923c"/></linearGradient><linearGradient id="lgText" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#f0f0f8"/><stop offset="100%" stopColor="#c8c8d8"/></linearGradient><filter id="lgGl"><feGaussianBlur stdDeviation="3" result="b"/><feComposite in="SourceGraphic" in2="b" operator="over"/></filter></defs><g transform="translate(8,12)"><line x1="20" y1="20" x2="8" y2="8" stroke="#f97316" strokeWidth="1.5" opacity="0.4"/><line x1="20" y1="20" x2="34" y2="6" stroke="#f97316" strokeWidth="1.5" opacity="0.4"/><line x1="20" y1="20" x2="36" y2="28" stroke="#f97316" strokeWidth="1.5" opacity="0.3"/><line x1="20" y1="20" x2="6" y2="32" stroke="#f97316" strokeWidth="1.5" opacity="0.3"/><line x1="20" y1="20" x2="28" y2="38" stroke="#f97316" strokeWidth="1.5" opacity="0.25"/><circle cx="8" cy="8" r="2.5" fill="#f97316" opacity="0.6"/><circle cx="34" cy="6" r="2" fill="#f97316" opacity="0.5"/><circle cx="36" cy="28" r="1.8" fill="#f97316" opacity="0.4"/><circle cx="6" cy="32" r="2" fill="#f97316" opacity="0.45"/><circle cx="28" cy="38" r="1.5" fill="#f97316" opacity="0.35"/><circle cx="20" cy="20" r="5" fill="url(#lgGlow)" filter="url(#lgGl)"/><circle cx="20" cy="20" r="2.5" fill="#0b0b14"/><circle cx="20" cy="20" r="1.2" fill="#f97316"/></g><text x="60" y="44" fontFamily="'Chakra Petch',system-ui,sans-serif" fontWeight="700" fontSize="36" letterSpacing="0.18em" fill="url(#lgText)">NTLGNC</text><rect x="62" y="50" width="48" height="1.5" rx="0.75" fill="#f97316" opacity="0.7"/></svg>
+            <svg viewBox="0 0 320 64" fill="none" xmlns="http://www.w3.org/2000/svg" className="h-[36px] w-auto"><defs><linearGradient id="lgGlow" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#f97316"/><stop offset="100%" stopColor="#fb923c"/></linearGradient><linearGradient id="lgText" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#f0f0f8"/><stop offset="100%" stopColor="#c8c8d8"/></linearGradient><filter id="lgGl"><feGaussianBlur stdDeviation="3" result="b"/><feComposite in="SourceGraphic" in2="b" operator="over"/></filter></defs><g transform="translate(8,12)"><line x1="20" y1="20" x2="8" y2="8" stroke="#f97316" strokeWidth="1.5" opacity="0.4"/><line x1="20" y1="20" x2="34" y2="6" stroke="#f97316" strokeWidth="1.5" opacity="0.4"/><line x1="20" y1="20" x2="36" y2="28" stroke="#f97316" strokeWidth="1.5" opacity="0.3"/><line x1="20" y1="20" x2="6" y2="32" stroke="#f97316" strokeWidth="1.5" opacity="0.3"/><line x1="20" y1="20" x2="28" y2="38" stroke="#f97316" strokeWidth="1.5" opacity="0.25"/><circle cx="8" cy="8" r="2.5" fill="#f97316" opacity="0.6"/><circle cx="34" cy="6" r="2" fill="#f97316" opacity="0.5"/><circle cx="36" cy="28" r="1.8" fill="#f97316" opacity="0.4"/><circle cx="6" cy="32" r="2" fill="#f97316" opacity="0.45"/><circle cx="28" cy="38" r="1.5" fill="#f97316" opacity="0.35"/><circle cx="20" cy="20" r="5" fill="url(#lgGlow)" filter="url(#lgGl)"/><circle cx="20" cy="20" r="2.5" fill="#0b0b14"/><circle cx="20" cy="20" r="1.2" fill="#f97316"/></g><text x="60" y="44" fontFamily="'Chakra Petch',system-ui,sans-serif" fontWeight="700" fontSize="36" letterSpacing="0.18em" fill="url(#lgText)">FRACMAP</text><rect x="62" y="50" width="48" height="1.5" rx="0.75" fill="#f97316" opacity="0.7"/></svg>
           </a>
           <a href="/" className="text-xs text-brand hover:text-white transition-colors">← Back to dashboard</a>
         </div>
@@ -21,20 +21,20 @@ export default function PrivacyPage() {
 
         <div className="space-y-8 text-sm text-white/70 leading-relaxed">
           <p>
-            ntlgnc (&ldquo;we&rdquo;, &ldquo;us&rdquo;, &ldquo;our&rdquo;) respects your privacy and is committed to protecting your personal data. This Privacy Policy explains how we collect, use, and safeguard information when you use{" "}
-            <a href="https://ntlgnc.com" className="text-brand hover:underline">https://ntlgnc.com</a> (the &ldquo;Website&rdquo;).
+            fracmap (&ldquo;we&rdquo;, &ldquo;us&rdquo;, &ldquo;our&rdquo;) respects your privacy and is committed to protecting your personal data. This Privacy Policy explains how we collect, use, and safeguard information when you use{" "}
+            <a href="https://fracmap.com" className="text-brand hover:underline">https://fracmap.com</a> (the &ldquo;Website&rdquo;).
           </p>
 
           <section>
             <h2 className="text-base font-semibold text-white mb-2">1. Who we are</h2>
             <p>
-              ntlgnc<br />
+              fracmap<br />
               13 Old Rectory Close<br />
               Instow, Devon EX39 4LY<br />
               United Kingdom
             </p>
             <p className="mt-2">If you have questions about this policy, contact us at{" "}
-              <a href="mailto:support@ntlgnc.com" className="text-brand hover:underline">support@ntlgnc.com</a>.
+              <a href="mailto:support@fracmap.com" className="text-brand hover:underline">support@fracmap.com</a>.
             </p>
           </section>
 
@@ -60,7 +60,7 @@ export default function PrivacyPage() {
             <h2 className="text-base font-semibold text-white mb-2">3. How we use your data</h2>
             <p>We use your data to:</p>
             <ul className="list-disc list-inside ml-2 mt-1 space-y-0.5">
-              <li>Create and manage your ntlgnc account</li>
+              <li>Create and manage your fracmap account</li>
               <li>Authenticate you via Twitter/X OAuth</li>
               <li>Operate, maintain, and improve the Website</li>
               <li>Prevent fraud and abuse</li>
@@ -129,7 +129,7 @@ export default function PrivacyPage() {
           <section className="border-t border-white/10 pt-8">
             <h2 className="text-base font-semibold text-white mb-2">Manage your account</h2>
             <p>To delete your account, unsubscribe from communications, or request a copy of your data, use the link below or email us at{" "}
-              <a href="mailto:support@ntlgnc.com" className="text-brand hover:underline">support@ntlgnc.com</a>.
+              <a href="mailto:support@fracmap.com" className="text-brand hover:underline">support@fracmap.com</a>.
             </p>
             <a href="/unsubscribe" className="inline-block mt-3 px-4 py-2 text-xs font-semibold rounded-lg border border-brand/30 text-brand hover:bg-brand/10 transition-colors">
               Unsubscribe / Delete Account
@@ -139,7 +139,7 @@ export default function PrivacyPage() {
       </main>
 
       <footer className="text-center py-6 text-white/20 text-[11px] border-t border-line mt-10">
-        NTLGNC · AI Market Desk
+        FRACMAP · AI Market Desk
       </footer>
     </div>
   );

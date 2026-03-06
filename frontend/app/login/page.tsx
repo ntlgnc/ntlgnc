@@ -18,7 +18,7 @@ export default function LoginPage() {
     <div className="min-h-[80vh] flex items-center justify-center">
       <div className="w-full max-w-sm p-8 rounded-xl" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
         <div className="text-center mb-8">
-          <div className="text-lg font-mono font-black mb-1" style={{ color: GOLD }}>NTLGNC</div>
+          <div className="text-lg font-mono font-black mb-1" style={{ color: GOLD }}>FRACMAP</div>
           <p className="text-[11px] font-mono text-white/55">Sign in to access real-time signals</p>
         </div>
 

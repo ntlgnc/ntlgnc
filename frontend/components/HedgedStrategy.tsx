@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import { adminFetch } from "@/lib/admin-fetch";
 
 const GOLD = "#D4A843";
 
@@ -246,7 +247,7 @@ export default function HedgedStrategy({ oosSignals, oosResults, oosBars, barMin
     setSaveMsg(null);
     try {
       const nm = `Hedged ×${winnerCombo?.minStr||1} gap≤${maxGap} SR${sharpe.toFixed(1)}`;
-      const res = await fetch("/api/fracmap-strategy", {
+      const res = await adminFetch("/api/fracmap-strategy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

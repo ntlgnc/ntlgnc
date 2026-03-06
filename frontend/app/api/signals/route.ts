@@ -141,55 +141,58 @@ export async function GET(req: NextRequest) {
       };
       const interval = intervals[period] || "1 day";
 
-      // Closed hedged pairs in period
-      const { rows: pairRows } = await pool.query(`
-        SELECT s.pair_return
-        FROM "FracmapSignal" s
-        WHERE s.pair_id IS NOT NULL AND s.pair_return IS NOT NULL
-          AND s.status = 'closed' AND s."closedAt" > NOW() - INTERVAL '${interval}'
-          AND s.pair_return != 0
-      `);
-      // Deduplicate by taking one leg per pair (pair_return is stored on both legs)
-      const seen = new Set<number>();
-      const pairReturns: number[] = [];
-      for (const r of pairRows) {
-        const ret = parseFloat(r.pair_return);
-        if (!seen.has(ret * 10000)) { // simple dedup
-          seen.add(ret * 10000);
-          pairReturns.push(ret);
-        }
-      }
-      // More robust: query distinct pair_ids
+      // Closed hedged pairs in period (deduplicated by pair_id)
       const { rows: distinctPairs } = await pool.query(`
         SELECT DISTINCT ON (pair_id) pair_id, pair_return
         FROM "FracmapSignal"
         WHERE pair_id IS NOT NULL AND pair_return IS NOT NULL
           AND status = 'closed' AND "closedAt" > NOW() - INTERVAL '${interval}'
       `);
-      const hedgedReturns = distinctPairs.map((r: any) => parseFloat(r.pair_return) || 0);
-      const cumReturn = hedgedReturns.reduce((s: number, r: number) => s + r, 0);
-      const wins = hedgedReturns.filter((r: number) => r > 0).length;
-      const winRate = hedgedReturns.length > 0 ? (wins / hedgedReturns.length * 100) : 0;
-      const mean = hedgedReturns.length > 0 ? cumReturn / hedgedReturns.length : 0;
-      const std = hedgedReturns.length > 1 ? Math.sqrt(hedgedReturns.reduce((a: number, b: number) => a + (b - mean) ** 2, 0) / hedgedReturns.length) : 0;
+      const pairedReturns = distinctPairs.map((r: any) => parseFloat(r.pair_return) || 0);
+
+      // Orphaned signals: closed with no pair partner (pair_id IS NULL)
+      const { rows: orphanRows } = await pool.query(`
+        SELECT s."returnPct"
+        FROM "FracmapSignal" s
+        LEFT JOIN "FracmapStrategy" st ON s."strategyId" = st.id
+        WHERE s.pair_id IS NULL AND s.status = 'closed'
+          AND s."returnPct" IS NOT NULL
+          AND s."closedAt" > NOW() - INTERVAL '${interval}'
+          AND (st.active = true OR s."strategyId" IS NULL)
+      `);
+      const orphanReturns = orphanRows.map((r: any) => parseFloat(r.returnPct) || 0);
+
+      // Combine all returns for honest stats
+      const allReturns = [...pairedReturns, ...orphanReturns];
+      const cumReturn = allReturns.reduce((s: number, r: number) => s + r, 0);
+      const wins = allReturns.filter((r: number) => r > 0).length;
+      const winRate = allReturns.length > 0 ? (wins / allReturns.length * 100) : 0;
+      const mean = allReturns.length > 0 ? cumReturn / allReturns.length : 0;
+      const std = allReturns.length > 1 ? Math.sqrt(allReturns.reduce((a: number, b: number) => a + (b - mean) ** 2, 0) / allReturns.length) : 0;
       const sharpe = std > 0 ? (mean / std) * Math.sqrt(252) : 0;
 
-      // Open hedged pairs
-      const { rows: openPairs } = await pool.query(`
+      // Open signals (paired + orphaned)
+      const { rows: openPaired } = await pool.query(`
         SELECT DISTINCT ON (pair_id) pair_id
         FROM "FracmapSignal"
         WHERE pair_id IS NOT NULL AND status = 'open'
+      `);
+      const { rows: openOrphans } = await pool.query(`
+        SELECT COUNT(*) as cnt FROM "FracmapSignal"
+        WHERE pair_id IS NULL AND status = 'open'
       `);
 
       return NextResponse.json({
         hedgedStats: {
           period,
-          closedPairs: hedgedReturns.length,
+          closedPairs: allReturns.length,
+          pairedCount: pairedReturns.length,
+          orphanCount: orphanReturns.length,
           wins,
           cumReturn: Math.round(cumReturn * 1000) / 1000,
           winRate: Math.round(winRate * 10) / 10,
           sharpe: Math.round(sharpe * 100) / 100,
-          openPairs: openPairs.length,
+          openPairs: openPaired.length + (parseInt(openOrphans[0]?.cnt) || 0),
         }
       });
     }
@@ -385,7 +388,8 @@ export async function GET(req: NextRequest) {
       const { rows: pairedSignals } = await pool.query(`
         SELECT s.id, s.symbol, s.direction, s."entryPrice", s."exitPrice",
                s."returnPct", s.status, s."createdAt", s."closedAt", s."holdBars", s."strategyId",
-               s.pair_id, s.pair_symbol, s.pair_direction, s.pair_return,
+               s.pair_id, s.pair_symbol, s.pair_direction, s.pair_return, s.pair_type,
+               s."detectedAt", s."enteredAt",
                st."barMinutes"
         FROM "FracmapSignal" s
         LEFT JOIN "FracmapStrategy" st ON s."strategyId" = st.id
@@ -402,7 +406,7 @@ export async function GET(req: NextRequest) {
         pairMap[s.pair_id].push(s);
       }
 
-      const pairs = [];
+      const pairs: any[] = [];
       for (const [pairId, legs] of Object.entries(pairMap)) {
         if (legs.length !== 2) continue;
         const [legA, legB] = legs.sort((a: any, b: any) =>
@@ -413,7 +417,9 @@ export async function GET(req: NextRequest) {
           pair_id: pairId,
           legA, legB,
           pair_return: legA.pair_return,
+          pair_type: legA.pair_type || null,
           status: pairStatus,
+          solo: false,
         });
       }
 
@@ -421,37 +427,172 @@ export async function GET(req: NextRequest) {
         new Date(b.legA.createdAt).getTime() - new Date(a.legA.createdAt).getTime()
       );
 
-      // Get unpaired signals
-      const { rows: unpaired } = await pool.query(`
-        SELECT s.id, s.symbol, s.direction, s."entryPrice", s."exitPrice",
-               s."returnPct", s.status, s."createdAt", s."closedAt", s."holdBars",
-               st."barMinutes"
-        FROM "FracmapSignal" s
-        LEFT JOIN "FracmapStrategy" st ON s."strategyId" = st.id
-        WHERE s.pair_id IS NULL AND s.status IN ('open', 'closed')
-          AND (st.active = true OR s."strategyId" IS NULL)
-        AND s."createdAt" > NOW() - INTERVAL '${interval}'
-        ORDER BY s."createdAt" DESC
-      `);
-
-      // Stats
+      // Stats — paired trades only
       const closedPairs = pairs.filter((p: any) => p.status === 'closed' && p.pair_return != null);
-      const pairRets = closedPairs.map((p: any) => p.pair_return);
-      const avgPairReturn = pairRets.length > 0 ? pairRets.reduce((s: number, r: number) => s + r, 0) / pairRets.length : 0;
-      const pairWinRate = pairRets.length > 0 ? pairRets.filter((r: number) => r > 0).length / pairRets.length * 100 : 0;
+      const allRets = closedPairs.map((p: any) => +p.pair_return);
+      const avgReturn = allRets.length > 0 ? allRets.reduce((s: number, r: number) => s + r, 0) / allRets.length : 0;
+      const winRate = allRets.length > 0 ? allRets.filter((r: number) => r > 0).length / allRets.length * 100 : 0;
 
       return NextResponse.json({
         pairs,
-        unpaired,
+        unpaired: [],
         stats: {
           total_pairs: pairs.length,
           open_pairs: pairs.filter((p: any) => p.status === 'open').length,
           closed_pairs: closedPairs.length,
-          avg_pair_return_bps: Math.round(avgPairReturn * 100),
-          pair_win_rate: Math.round(pairWinRate * 10) / 10,
-          unpaired_count: unpaired.length,
+          avg_pair_return_bps: Math.round(avgReturn * 100),
+          pair_win_rate: Math.round(winRate * 10) / 10,
         },
       });
+    }
+
+    if (action === "pair-chart") {
+      const pairId = searchParams.get("pairId");
+      if (!pairId) return NextResponse.json({ error: "pairId required" }, { status: 400 });
+
+      // Get both legs
+      const { rows: legs } = await pool.query(
+        `SELECT s.id, s.symbol, s.direction, s."entryPrice", s."exitPrice", s."returnPct",
+                s.status, s."createdAt", s."closedAt", s."holdBars", s."strategyId",
+                s."maxCycle", st."barMinutes"
+         FROM "FracmapSignal" s
+         LEFT JOIN "FracmapStrategy" st ON s."strategyId" = st.id
+         WHERE s.pair_id = $1
+         ORDER BY s."createdAt" ASC`, [pairId]
+      );
+      if (legs.length < 2) return NextResponse.json({ error: "Pair not found" }, { status: 404 });
+
+      const [legA, legB] = legs;
+      const barMinutes = parseInt(legA.barMinutes) || 60;
+      const table = barMinutes <= 1 ? "Candle1m" : barMinutes <= 60 ? "Candle1h" : "Candle1d";
+      const barMs = barMinutes * 60_000;
+
+      // n = max cycle of both legs
+      const maxCycle = Math.max(legA.maxCycle || legA.holdBars || 10, legB.maxCycle || legB.holdBars || 10);
+      const barsBefore = maxCycle;
+      const barsAfter = Math.min(legA.holdBars || 10, legB.holdBars || 10) + 5;
+
+      // Prediction bar = snap entry time to bar boundary
+      const entryMs = new Date(legA.createdAt).getTime();
+      const predictionBar = Math.floor(entryMs / barMs) * barMs;
+      const startTime = new Date(predictionBar - barsBefore * barMs);
+      const endTime = new Date(predictionBar + barsAfter * barMs);
+
+      // Fetch candles for both symbols
+      const fetchCandles = async (symbol: string) => {
+        const { rows } = await pool.query(`
+          SELECT timestamp as time, open, high, low, close FROM "${table}"
+          WHERE symbol = $1 AND timestamp >= $2 AND timestamp <= $3
+          ORDER BY time ASC LIMIT 500
+        `, [symbol, startTime, endTime]);
+        return rows.map((c: any) => ({ time: c.time, open: +c.open, high: +c.high, low: +c.low, close: +c.close }));
+      };
+
+      const [candlesA, candlesB] = await Promise.all([fetchCandles(legA.symbol), fetchCandles(legB.symbol)]);
+
+      // Rebase both to 1 at prediction bar
+      const rebase = (candles: any[]) => {
+        const predBar = candles.find((c: any) => new Date(c.time).getTime() >= predictionBar);
+        const basePrice = predBar ? predBar.close : candles[candles.length - 1]?.close || 1;
+        return candles.map((c: any) => ({
+          time: c.time,
+          open: c.open / basePrice,
+          high: c.high / basePrice,
+          low: c.low / basePrice,
+          close: c.close / basePrice,
+        }));
+      };
+
+      return NextResponse.json({
+        legA: { symbol: legA.symbol, direction: legA.direction, entryPrice: +legA.entryPrice, exitPrice: legA.exitPrice ? +legA.exitPrice : null, returnPct: legA.returnPct ? +legA.returnPct : null, holdBars: legA.holdBars },
+        legB: { symbol: legB.symbol, direction: legB.direction, entryPrice: +legB.entryPrice, exitPrice: legB.exitPrice ? +legB.exitPrice : null, returnPct: legB.returnPct ? +legB.returnPct : null, holdBars: legB.holdBars },
+        candlesA: rebase(candlesA),
+        candlesB: rebase(candlesB),
+        predictionBarIdx: rebase(candlesA).findIndex((c: any) => new Date(c.time).getTime() >= predictionBar),
+        barMinutes,
+        maxCycle,
+      });
+    }
+
+    if (action === "natural-backtest") {
+      // Always compute pairs from the full 2-month window — frontend slices by timeframe
+      const timeframes = [
+        { barMinutes: 1, key: "1m", barMs: 60_000 },
+        { barMinutes: 60, key: "1h", barMs: 3600_000 },
+        { barMinutes: 1440, key: "1d", barMs: 86400_000 },
+      ];
+
+      const backtest: Record<string, any> = {};
+
+      for (const { barMinutes, key, barMs } of timeframes) {
+        const { rows: signals } = await pool.query(`
+          SELECT s.id, s.symbol, s.direction, s."returnPct", s."createdAt",
+                 s."entryPrice", s."exitPrice", s."closedAt", s."holdBars",
+                 st."barMinutes"
+          FROM "FracmapSignal" s
+          LEFT JOIN "FracmapStrategy" st ON s."strategyId" = st.id
+          WHERE s.status = 'closed' AND s."returnPct" IS NOT NULL
+            AND st."barMinutes" = $1
+            AND s."createdAt" >= NOW() - INTERVAL '2 months'
+          ORDER BY s."createdAt"
+        `, [barMinutes]);
+
+        // Group by bar boundary
+        const barGroups: Record<number, any[]> = {};
+        for (const sig of signals) {
+          const ts = new Date(sig.createdAt).getTime();
+          const barKey = Math.floor(ts / barMs) * barMs;
+          if (!barGroups[barKey]) barGroups[barKey] = [];
+          barGroups[barKey].push(sig);
+        }
+
+        // Find natural pairs: same bar, opposite direction, different coins
+        const naturalPairs: { bar: number; pairReturn: number; legA: any; legB: any }[] = [];
+        const usedIds = new Set<string>();
+
+        for (const [barKeyStr, barSigs] of Object.entries(barGroups)) {
+          const longs = barSigs.filter((s: any) => s.direction === 'LONG');
+          const shorts = barSigs.filter((s: any) => s.direction === 'SHORT');
+          for (const long of longs) {
+            for (const short of shorts) {
+              if (long.symbol === short.symbol) continue;
+              if (usedIds.has(long.id) || usedIds.has(short.id)) continue;
+              usedIds.add(long.id);
+              usedIds.add(short.id);
+              naturalPairs.push({
+                bar: +barKeyStr,
+                pairReturn: (+long.returnPct) + (+short.returnPct),
+                legA: long,
+                legB: short,
+              });
+              break;
+            }
+          }
+        }
+
+        // Sort chronologically and build full equity curve with per-pair returns
+        naturalPairs.sort((a, b) => a.bar - b.bar);
+        let cumReturn = 0;
+        const curve = naturalPairs.map(p => {
+          cumReturn += p.pairReturn;
+          return { time: new Date(p.bar).toISOString(), cumReturn: Math.round(cumReturn * 1000) / 1000, ret: Math.round(p.pairReturn * 10000) / 10000 };
+        });
+
+        // Build pair list for trade table (most recent first)
+        const pairs = [...naturalPairs].reverse().map((p, i) => ({
+          pair_id: `${key}-${p.legA.id}-${p.legB.id}`,
+          legA: p.legA,
+          legB: p.legB,
+          pair_return: Math.round(p.pairReturn * 10000) / 10000,
+          status: "closed",
+        }));
+
+        backtest[key] = { curve, pairs };
+      }
+
+      const res = NextResponse.json({ backtest });
+      res.headers.set("Cache-Control", "s-maxage=300, stale-while-revalidate=600");
+      return res;
     }
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });

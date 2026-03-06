@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Client } from "pg";
+import { validateAdminRequest, unauthorizedResponse } from "@/lib/admin-auth";
 
 const DB_URL = process.env.DATABASE_URL;
 
@@ -9,9 +10,17 @@ const DANGEROUS_PATTERNS = [
   /DROP\s+DATABASE/i,
   /TRUNCATE/i,
   /ALTER\s+TABLE.*DROP/i,
+  /DELETE\s+FROM/i,
+  /UPDATE\s+/i,
+  /INSERT\s+INTO/i,
+  /CREATE\s+FUNCTION/i,
+  /CREATE\s+OR\s+REPLACE\s+FUNCTION/i,
+  /GRANT\s+/i,
+  /REVOKE\s+/i,
 ];
 
 export async function POST(req: NextRequest) {
+  if (!validateAdminRequest(req)) return unauthorizedResponse();
   if (!DB_URL) return NextResponse.json({ error: "No DATABASE_URL" }, { status: 500 });
 
   let body;

@@ -362,52 +362,154 @@ function MiniEquityCurve({ label, signals, color, prices, filters, timeWindow }:
 }
 
 // ─── Hedged Equity Card (with tooltip) ──────────────────────────────────
-function HedgedEquityCard({ tfPairs, label, color, prices }: { tfPairs: any[]; label: string; color: string; prices: Record<string, number> }) {
+// ─── Pair Chart (rebased dual-coin OHLC) ─────────────────────────────────
+function PairChart({ pairId }: { pairId: string }) {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(`/api/signals?action=pair-chart&pairId=${pairId}`)
+      .then(r => r.json())
+      .then(d => setData(d))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [pairId]);
+
+  if (loading) return <div className="text-[10px] font-mono text-white/40 py-4 text-center">Loading chart...</div>;
+  if (!data || !data.candlesA?.length || !data.candlesB?.length) return <div className="text-[10px] font-mono text-white/40 py-4 text-center">No chart data</div>;
+
+  const W = 700, H = 260, pad = 40, topPad = 20, botPad = 25;
+  const colorA = data.legA.direction === "LONG" ? GREEN : RED;
+  const colorB = data.legB.direction === "LONG" ? GREEN : RED;
+
+  // Merge all timestamps to get unified x-axis
+  const allTimes = new Set<number>();
+  for (const c of data.candlesA) allTimes.add(new Date(c.time).getTime());
+  for (const c of data.candlesB) allTimes.add(new Date(c.time).getTime());
+  const sortedTimes = [...allTimes].sort((a, b) => a - b);
+  const n = sortedTimes.length;
+  if (n < 2) return <div className="text-[10px] font-mono text-white/40 py-4 text-center">Insufficient data</div>;
+
+  // Index candles by timestamp
+  const mapA: Record<number, any> = {};
+  const mapB: Record<number, any> = {};
+  for (const c of data.candlesA) mapA[new Date(c.time).getTime()] = c;
+  for (const c of data.candlesB) mapB[new Date(c.time).getTime()] = c;
+
+  // Find Y range across both rebased series
+  let minY = Infinity, maxY = -Infinity;
+  for (const t of sortedTimes) {
+    const a = mapA[t]; const b = mapB[t];
+    if (a) { minY = Math.min(minY, a.low); maxY = Math.max(maxY, a.high); }
+    if (b) { minY = Math.min(minY, b.low); maxY = Math.max(maxY, b.high); }
+  }
+  const yRange = maxY - minY || 0.01;
+  const yPad = yRange * 0.05;
+  minY -= yPad; maxY += yPad;
+
+  const xScale = (i: number) => pad + (i / (n - 1)) * (W - pad * 2);
+  const yScale = (v: number) => topPad + ((maxY - v) / (maxY - minY)) * (H - topPad - botPad);
+  const candleW = Math.max(1, Math.min(6, (W - pad * 2) / n * 0.6));
+
+  // Prediction bar vertical line
+  const predIdx = data.predictionBarIdx >= 0 ? data.predictionBarIdx : -1;
+  // Map predictionBarIdx from candlesA index to sortedTimes index
+  let predTimeIdx = -1;
+  if (predIdx >= 0 && data.candlesA[predIdx]) {
+    const predT = new Date(data.candlesA[predIdx].time).getTime();
+    predTimeIdx = sortedTimes.indexOf(predT);
+  }
+
+  // Render OHLC candles for a series
+  const renderCandles = (map: Record<number, any>, color: string, offset: number) => {
+    return sortedTimes.map((t, i) => {
+      const c = map[t];
+      if (!c) return null;
+      const x = xScale(i) + offset;
+      const bodyTop = yScale(Math.max(c.open, c.close));
+      const bodyBot = yScale(Math.min(c.open, c.close));
+      const bodyH = Math.max(1, bodyBot - bodyTop);
+      const isUp = c.close >= c.open;
+      return (
+        <g key={`${t}-${offset}`}>
+          <line x1={x} y1={yScale(c.high)} x2={x} y2={yScale(c.low)}
+            stroke={isUp ? color : "rgba(255,255,255,0.45)"} strokeWidth={0.5} />
+          <rect x={x - candleW / 2} y={bodyTop} width={candleW} height={bodyH}
+            fill={isUp ? color : "#1a1a2e"} stroke={isUp ? color : "rgba(255,255,255,0.45)"} strokeWidth={0.5} />
+        </g>
+      );
+    });
+  };
+
+  return (
+    <div className="w-full overflow-x-auto">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ minHeight: 200 }}>
+        {/* Grid lines */}
+        {[0.25, 0.5, 0.75].map(f => {
+          const y = topPad + f * (H - topPad - botPad);
+          const val = maxY - f * (maxY - minY);
+          return (
+            <g key={f}>
+              <line x1={pad} y1={y} x2={W - pad} y2={y} stroke="rgba(255,255,255,0.04)" strokeWidth={0.5} />
+              <text x={pad - 4} y={y + 3} textAnchor="end" fill="rgba(255,255,255,0.3)" fontSize={8} fontFamily="monospace">{val.toFixed(3)}</text>
+            </g>
+          );
+        })}
+        {/* 1.000 baseline */}
+        <line x1={pad} y1={yScale(1)} x2={W - pad} y2={yScale(1)}
+          stroke="rgba(255,255,255,0.15)" strokeWidth={1} strokeDasharray="4 3" />
+        <text x={pad - 4} y={yScale(1) + 3} textAnchor="end" fill="rgba(255,255,255,0.5)" fontSize={8} fontFamily="monospace">1.000</text>
+        {/* Prediction bar marker */}
+        {predTimeIdx >= 0 && (
+          <>
+            <line x1={xScale(predTimeIdx)} y1={topPad} x2={xScale(predTimeIdx)} y2={H - botPad}
+              stroke={GOLD} strokeWidth={1} strokeDasharray="4 2" opacity={0.5} />
+            <text x={xScale(predTimeIdx)} y={topPad - 4} textAnchor="middle" fill={GOLD} fontSize={8} fontFamily="monospace" opacity={0.7}>signal</text>
+          </>
+        )}
+        {/* Candles: A offset left, B offset right */}
+        {renderCandles(mapA, colorA, -candleW * 0.6)}
+        {renderCandles(mapB, colorB, candleW * 0.6)}
+        {/* Legend */}
+        <rect x={W - pad - 160} y={topPad} width={160} height={32} rx={4} fill="rgba(0,0,0,0.6)" />
+        <rect x={W - pad - 152} y={topPad + 6} width={8} height={8} fill={colorA} rx={1} />
+        <text x={W - pad - 140} y={topPad + 14} fill="rgba(255,255,255,0.8)" fontSize={9} fontFamily="monospace">
+          {data.legA.direction[0]} {data.legA.symbol.replace("USDT", "")}
+        </text>
+        <rect x={W - pad - 152} y={topPad + 19} width={8} height={8} fill={colorB} rx={1} />
+        <text x={W - pad - 140} y={topPad + 27} fill="rgba(255,255,255,0.8)" fontSize={9} fontFamily="monospace">
+          {data.legB.direction[0]} {data.legB.symbol.replace("USDT", "")}
+        </text>
+      </svg>
+    </div>
+  );
+}
+
+// ─── Backtest Equity Card ────────────────────────────────────────────────
+function BacktestEquityCard({ curve, stats, label, color }: {
+  curve: { time: string; cumReturn: number }[];
+  stats: { pairs: number; wins: number; winRate: number; totalReturn: number; avgReturn: number; sharpe: number; profitFactor: number; maxDrawdown: number };
+  label: string;
+  color: string;
+}) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const svgRef = React.useRef<SVGSVGElement>(null);
 
-  const closedPairs = tfPairs
-    .filter((p: any) => p.status === "closed" && p.pair_return != null)
-    .sort((a: any, b: any) => new Date(a.legA.createdAt).getTime() - new Date(b.legA.createdAt).getTime());
-  const openPairs = tfPairs.filter((p: any) => p.status === "open");
-  const pairRets = closedPairs.map((p: any) => +p.pair_return);
-  const closedTimes = closedPairs.map((p: any) => new Date(p.legA?.closedAt || p.legA?.createdAt).getTime());
-
-  let openPairPnL = 0;
-  const openPairReturns: number[] = [];
-  for (const p of openPairs) {
-    let legAret = 0, legBret = 0, hasData = false;
-    const cpA = prices[p.legA?.symbol];
-    const cpB = prices[p.legB?.symbol];
-    if (cpA && p.legA?.entryPrice) { legAret = p.legA.direction === "LONG" ? (cpA / p.legA.entryPrice - 1) * 100 : (p.legA.entryPrice / cpA - 1) * 100; hasData = true; }
-    if (cpB && p.legB?.entryPrice) { legBret = p.legB.direction === "LONG" ? (cpB / p.legB.entryPrice - 1) * 100 : (p.legB.entryPrice / cpB - 1) * 100; hasData = true; }
-    if (hasData) { openPairPnL += legAret + legBret; openPairReturns.push(legAret + legBret); }
-  }
-
-  let cum = 0;
-  const cumData = closedPairs.map((p: any) => { cum += p.pair_return; return cum; });
-  if (openPairReturns.length > 0 && cumData.length > 0) { cumData.push(cum + openPairPnL); }
-  const closedRet = pairRets.reduce((s: number, r: number) => s + r, 0);
-  const totalRet = closedRet + openPairPnL;
-  const wins = pairRets.filter((r: number) => r > 0).length;
-  const winRate = pairRets.length > 0 ? (wins / pairRets.length * 100) : 0;
-  const meanRet = pairRets.length > 0 ? pairRets.reduce((s: number, r: number) => s + r, 0) / pairRets.length : 0;
-  const stdRet = pairRets.length > 1 ? Math.sqrt(pairRets.reduce((s: number, r: number) => s + (r - meanRet) ** 2, 0) / pairRets.length) : 0;
-  const sharpe = stdRet > 0 ? (meanRet / stdRet) * Math.sqrt(252) : 0;
-  const grossWin = pairRets.filter((r: number) => r > 0).reduce((s: number, r: number) => s + r, 0);
-  const grossLoss = Math.abs(pairRets.filter((r: number) => r < 0).reduce((s: number, r: number) => s + r, 0));
-  const pf = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? 999 : 0;
-  const maxDD = (() => { let peak = 0, dd = 0; for (const v of cumData) { peak = Math.max(peak, v); dd = Math.min(dd, v - peak); } return dd; })();
+  const cumData = curve.map(p => p.cumReturn);
+  const curveTimes = curve.map(p => new Date(p.time).getTime());
 
   const cW = 290, cH = 130, pad = 10;
-  const lineColor = totalRet >= 0 ? GREEN : RED;
+  const lineColor = stats.totalReturn >= 0 ? GREEN : RED;
+
   let curveD = "", areaD = "", zeroY = cH / 2;
   const pts: { x: number; y: number }[] = [];
   if (cumData.length >= 2) {
     const minV = Math.min(0, ...cumData); const maxV = Math.max(0, ...cumData); const range = maxV - minV || 1;
     zeroY = cH - ((0 - minV) / range) * (cH - 16) - 8;
+    const tMin = curveTimes[0]; const tMax = curveTimes[curveTimes.length - 1]; const tRange = tMax - tMin || 1;
     for (let i = 0; i < cumData.length; i++) {
-      pts.push({ x: pad + (i / (cumData.length - 1)) * (cW - pad * 2), y: cH - ((cumData[i] - minV) / range) * (cH - 16) - 8 });
+      pts.push({ x: pad + ((curveTimes[i] - tMin) / tRange) * (cW - pad * 2), y: cH - ((cumData[i] - minV) / range) * (cH - 16) - 8 });
     }
     curveD = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
     areaD = `${curveD} L${pts[pts.length - 1].x.toFixed(1)},${zeroY} L${pad},${zeroY} Z`;
@@ -425,21 +527,24 @@ function HedgedEquityCard({ tfPairs, label, color, prices }: { tfPairs: any[]; l
     setHoverIdx(closest);
   }, [pts]);
 
-  const hoverDate = hoverIdx !== null && closedTimes[hoverIdx]
-    ? new Date(closedTimes[hoverIdx]).toLocaleDateString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
+  const hoverDate = hoverIdx !== null && curveTimes[hoverIdx]
+    ? new Date(curveTimes[hoverIdx]).toLocaleDateString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
     : "";
   const hoverVal = hoverIdx !== null && hoverIdx < cumData.length ? cumData[hoverIdx] : null;
+
+  const hoverPctX = hoverIdx !== null && pts[hoverIdx] ? (pts[hoverIdx].x / cW * 100) : 0;
+  const hoverPctY = hoverIdx !== null && pts[hoverIdx] ? (pts[hoverIdx].y / cH * 100) : 0;
 
   return (
     <div className="flex-1 min-w-[320px] rounded-xl overflow-hidden" style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${color}25` }}>
       <div className="flex">
-        <div className="flex-1 p-3 pr-0 flex items-stretch">
+        <div className="flex-1 p-3 pr-0 flex items-stretch relative">
           {cumData.length >= 2 ? (
             <svg ref={svgRef} viewBox={`0 0 ${cW} ${cH}`} preserveAspectRatio="none" className="w-full h-full" style={{ minHeight: 120 }}
               onMouseMove={handleMouseMove} onMouseLeave={() => setHoverIdx(null)}>
-              <defs><linearGradient id={`grad-h-${label}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={lineColor} stopOpacity="0.2" /><stop offset="100%" stopColor={lineColor} stopOpacity="0.02" /></linearGradient></defs>
+              <defs><linearGradient id={`grad-bt-${label}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={lineColor} stopOpacity="0.2" /><stop offset="100%" stopColor={lineColor} stopOpacity="0.02" /></linearGradient></defs>
               <line x1={pad} y1={zeroY} x2={cW - pad} y2={zeroY} stroke="rgba(255,255,255,0.08)" strokeWidth="1" strokeDasharray="4 4" />
-              <path d={areaD} fill={`url(#grad-h-${label})`} />
+              <path d={areaD} fill={`url(#grad-bt-${label})`} />
               <path d={curveD} fill="none" stroke={lineColor} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
               {pts.length > 0 && <circle cx={pts[pts.length - 1].x} cy={pts[pts.length - 1].y} r="3" fill={lineColor} />}
               {hoverIdx !== null && hoverVal !== null && pts[hoverIdx] && (
@@ -450,43 +555,63 @@ function HedgedEquityCard({ tfPairs, label, color, prices }: { tfPairs: any[]; l
               )}
             </svg>
           ) : (
-            <div className="flex items-center justify-center w-full" style={{ minHeight: 120 }}><span className="text-[10px] font-mono" style={{ color: "rgba(255,255,255,0.4)" }}>No closed pairs</span></div>
+            <div className="flex items-center justify-center w-full" style={{ minHeight: 120 }}><span className="text-[10px] font-mono" style={{ color: "rgba(255,255,255,0.4)" }}>No data</span></div>
           )}
-        </div>
-        <div className="shrink-0 p-3 pl-2 flex flex-col justify-between items-end">
-          {hoverIdx !== null && hoverVal !== null ? (
-            <div className="mb-2.5">
+          {/* Floating tooltip overlay on chart */}
+          {hoverIdx !== null && hoverVal !== null && (
+            <div className="absolute pointer-events-none" style={{
+              left: `${Math.min(Math.max(hoverPctX, 10), 70)}%`,
+              top: `${Math.min(Math.max(hoverPctY - 15, 5), 40)}%`,
+              background: "rgba(8,10,16,0.92)",
+              border: "1px solid rgba(255,255,255,0.12)",
+              borderRadius: 6, padding: "4px 8px",
+              zIndex: 10,
+            }}>
               <div className="text-[9px] font-mono text-white/50">{hoverDate}</div>
-              <div className="text-[14px] font-mono font-black tabular-nums" style={{ color: hoverVal >= 0 ? GREEN : RED }}>
+              <div className="text-[13px] font-mono font-black tabular-nums" style={{ color: hoverVal >= 0 ? GREEN : RED }}>
                 {hoverVal >= 0 ? "+" : ""}{hoverVal.toFixed(2)}%
               </div>
               <div className="text-[8px] font-mono text-white/40">pair #{(hoverIdx + 1)}/{cumData.length}</div>
             </div>
-          ) : (
-            <div className="flex items-center gap-1.5 mb-2.5">
-              <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold" style={{ background: `${color}15`, color }}>{label}</span>
-              <span className="text-[10px] font-mono text-white/80">Hedged</span>
-            </div>
           )}
-          <div className="w-full mb-1"><div className="flex items-baseline gap-1.5">
-            <span className="text-[8px] font-mono text-white/65 w-[34px] text-right">closed</span>
-            <span className="text-[11px] font-mono font-bold text-white/85 tabular-nums">{closedPairs.length}</span>
-            <span className="text-[14px] font-mono font-black tabular-nums leading-tight ml-auto" style={{ color: totalRet >= 0 ? GREEN : RED }}>{totalRet >= 0 ? "+" : ""}{totalRet.toFixed(2)}%</span>
-          </div></div>
-          <div className="w-full mb-2.5" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: 8 }}><div className="flex items-baseline gap-1.5">
-            <span className="text-[8px] font-mono text-white/65 w-[34px] text-right">open</span>
-            <span className="text-[11px] font-mono font-bold text-white/85 tabular-nums">{openPairs.length}</span>
-            {openPairReturns.length > 0 ? (
-              <span className="text-[12px] font-mono font-bold tabular-nums leading-tight ml-auto" style={{ color: openPairPnL >= 0 ? GREEN : RED }}>{openPairPnL >= 0 ? "+" : ""}{openPairPnL.toFixed(2)}%</span>
-            ) : (<span className="text-[11px] font-mono text-white/80 ml-auto">—</span>)}
-          </div></div>
+        </div>
+        <div className="shrink-0 p-3 pl-2 flex flex-col justify-between items-end">
+          <div className="flex items-center gap-1.5 mb-2.5">
+            <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold" style={{ background: `${color}15`, color }}>{label}</span>
+            <span className="text-[10px] font-mono text-white/80">Hedged Pairs</span>
+          </div>
+
+          {/* Closed row */}
+          <div className="w-full mb-1">
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-[8px] font-mono text-white/65 w-[34px] text-right">closed</span>
+              <span className="text-[11px] font-mono font-bold text-white/85 tabular-nums">{stats.pairs}</span>
+              <span className="text-[14px] font-mono font-black tabular-nums leading-tight ml-auto"
+                style={{ color: stats.totalReturn >= 0 ? GREEN : RED }}>
+                {stats.totalReturn >= 0 ? "+" : ""}{stats.totalReturn.toFixed(2)}%
+              </span>
+            </div>
+          </div>
+
+          {/* Wins row */}
+          <div className="w-full mb-2.5" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: 8 }}>
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-[8px] font-mono text-white/65 w-[34px] text-right">wins</span>
+              <span className="text-[11px] font-mono font-bold text-white/85 tabular-nums">{stats.wins}/{stats.pairs}</span>
+              <span className="text-[12px] font-mono font-bold tabular-nums leading-tight ml-auto"
+                style={{ color: GREEN }}>
+                {stats.winRate.toFixed(0)}%
+              </span>
+            </div>
+          </div>
+
+          {/* Detailed stats */}
           <div className="w-full space-y-0.5">
             {[
-              { l: "Win", v: `${winRate.toFixed(0)}%` },
-              { l: "Sharpe", v: sharpe.toFixed(2) },
-              { l: "Avg", v: `${meanRet >= 0 ? "+" : ""}${meanRet.toFixed(3)}%` },
-              { l: "PF", v: pf > 10 ? ">10" : pf.toFixed(2) },
-              { l: "MaxDD", v: `${maxDD.toFixed(1)}%` },
+              { l: "Sharpe", v: stats.sharpe.toFixed(2) },
+              { l: "Avg", v: `${stats.avgReturn >= 0 ? "+" : ""}${stats.avgReturn.toFixed(3)}%` },
+              { l: "PF", v: stats.profitFactor > 10 ? ">10" : stats.profitFactor.toFixed(2) },
+              { l: "MaxDD", v: `${stats.maxDrawdown.toFixed(1)}%` },
             ].map(s => (
               <div key={s.l} className="flex items-baseline gap-1.5">
                 <span className="text-[8px] font-mono uppercase tracking-wider text-white/65 w-[34px] text-right">{s.l}</span>
@@ -1137,6 +1262,7 @@ export default function SignalsPage() {
   const [activeFilters, setActiveFilters] = useState<any[]>([]);
   const [viewMode, setViewMode] = useState<"signals" | "hedged">("hedged");
   const [hedgedData, setHedgedData] = useState<{ pairs: any[]; unpaired: any[]; stats: any } | null>(null);
+  const [expandedPairId, setExpandedPairId] = useState<string | null>(null);
   const [strategyInfo, setStrategyInfo] = useState<Record<string, any>>({});
 
   // Tick clock every 10s
@@ -1171,6 +1297,64 @@ export default function SignalsPage() {
     const iv = setInterval(load, isPaid ? 10000 : 60000);
     return () => clearInterval(iv);
   }, [viewMode, timeframe, isPaid]);
+
+  // Load natural pairs backtest once (full 2-month curve) — frontend slices by timeframe
+  const [backtestRaw, setBacktestRaw] = useState<Record<string, { curve: { time: string; cumReturn: number; ret: number }[]; pairs?: any[] }> | null>(null);
+  useEffect(() => {
+    if (viewMode !== "hedged") return;
+    fetch("/api/signals?action=natural-backtest")
+      .then(r => r.json())
+      .then(d => { if (d.backtest) setBacktestRaw(d.backtest); })
+      .catch(() => {});
+  }, [viewMode]);
+
+  // Slice backtest curves by selected timeframe and compute stats
+  const backtestData = useMemo(() => {
+    if (!backtestRaw) return null;
+    const windowMs: Record<string, number> = { "1H": 3600_000, "1D": 86400_000, "1W": 7*86400_000, "1M": 30*86400_000 };
+    const cutoff = timeframe === "ALL" ? 0 : Date.now() - (windowMs[timeframe] || Infinity);
+
+    const result: Record<string, { stats: any; curve: any[]; pairs: any[] }> = {};
+    for (const [key, data] of Object.entries(backtestRaw)) {
+      const fullCurve = data.curve;
+      // Find the start index: first point at or after cutoff
+      let startIdx = 0;
+      if (cutoff > 0) {
+        for (let i = 0; i < fullCurve.length; i++) {
+          if (new Date(fullCurve[i].time).getTime() >= cutoff) { startIdx = i; break; }
+          startIdx = i + 1;
+        }
+      }
+      // Slice and rebase cumReturn to 0 at window start
+      const sliced = fullCurve.slice(startIdx);
+      const baseReturn = startIdx > 0 && fullCurve[startIdx - 1] ? fullCurve[startIdx - 1].cumReturn : (startIdx > 0 ? (sliced[0]?.cumReturn - sliced[0]?.ret) : 0);
+      const curve = sliced.map((p: any) => ({ time: p.time, cumReturn: Math.round((p.cumReturn - baseReturn) * 1000) / 1000 }));
+      // Compute stats from per-pair returns in the window
+      const rets = sliced.map((p: any) => p.ret);
+      const wins = rets.filter((r: number) => r > 0).length;
+      const totalReturn = rets.reduce((s: number, r: number) => s + r, 0);
+      const avgReturn = rets.length > 0 ? totalReturn / rets.length : 0;
+      const winRate = rets.length > 0 ? (wins / rets.length * 100) : 0;
+      const std = rets.length > 1 ? Math.sqrt(rets.reduce((s: number, r: number) => s + (r - avgReturn) ** 2, 0) / rets.length) : 0;
+      const sharpe = std > 0 ? (avgReturn / std) * Math.sqrt(252) : 0;
+      let peak = 0, maxDD = 0, cum = 0;
+      for (const r of rets) { cum += r; peak = Math.max(peak, cum); maxDD = Math.min(maxDD, cum - peak); }
+      const grossWin = rets.filter((r: number) => r > 0).reduce((s: number, r: number) => s + r, 0);
+      const grossLoss = Math.abs(rets.filter((r: number) => r < 0).reduce((s: number, r: number) => s + r, 0));
+      const profitFactor = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? 999 : 0;
+      // Slice pairs by timeframe cutoff (pairs are already sorted newest-first from API)
+      const allPairs = data.pairs || [];
+      const tfPairs = cutoff > 0
+        ? allPairs.filter((p: any) => new Date(p.legA.createdAt).getTime() >= cutoff)
+        : allPairs;
+      result[key] = {
+        stats: { pairs: rets.length, wins, winRate: Math.round(winRate * 10) / 10, totalReturn: Math.round(totalReturn * 100) / 100, avgReturn: Math.round(avgReturn * 10000) / 10000, sharpe: Math.round(sharpe * 100) / 100, profitFactor: Math.round(profitFactor * 100) / 100, maxDrawdown: Math.round(maxDD * 100) / 100 },
+        curve,
+        pairs: tfPairs,
+      };
+    }
+    return result;
+  }, [backtestRaw, timeframe]);
 
   // Reset page when filters change
   useEffect(() => { setPage(0); }, [periodicityFilter, directionFilter, timeframe, viewMode]);
@@ -1301,7 +1485,7 @@ export default function SignalsPage() {
 
   const delayMs = isPaid ? 0 : NET_POSITION_DELAY_MINS * 60 * 1000;
 
-  // Build balanced hedged signal list from hedgedData (both legs always included)
+  // Build signal list from hedgedData (paired legs + solo orphans)
   const hedgedSignals = useMemo(() => {
     const sigs: Signal[] = [];
     for (const p of (hedgedData?.pairs || [])) {
@@ -1387,99 +1571,66 @@ export default function SignalsPage() {
       {/* ── Hedged Pairs View ── */}
       {viewMode === "hedged" && (
         <div className="mb-6">
-          {/* Hedged equity charts — one per timeframe */}
-          {hedgedData?.pairs && (() => {
-            // Determine timeframe for each pair from barMinutes
-            const getPairTf = (p: any): string => {
-              const bm = p.legA?.barMinutes || p.legB?.barMinutes;
-              if (bm && bm >= 1440) return "1D";
-              if (bm && bm >= 60) return "1H";
-              if (bm && bm <= 1) return "1m";
-              return "ALL";
-            };
-
-            const tfConfigs = [
-              { key: "1m", label: "1M", color: "#3b82f6" },
-              { key: "1H", label: "1H", color: "#a78bfa" },
-              { key: "1D", label: "1D", color: GOLD },
-              { key: "ALL", label: "ALL", color: "rgba(255,255,255,0.6)" },
-            ];
-
-            // Group pairs by timeframe
-            const pairsByTf: Record<string, any[]> = {};
-            for (const p of hedgedData.pairs) {
-              const tf = getPairTf(p);
-              if (!pairsByTf[tf]) pairsByTf[tf] = [];
-              pairsByTf[tf].push(p);
-            }
-            // Always show all 3 main timeframes (1m, 1H, 1D)
-            const mainTfs = tfConfigs.filter(tc => tc.key !== "ALL");
-
-            // Helper to build one card
-            const buildCard = (tfPairs: any[], label: string, color: string) => {
-            if (tfPairs.length === 0) {
-              return (
-                <div key={label} className="flex-1 min-w-[320px] rounded-xl overflow-hidden" style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${color}25` }}>
-                  <div className="flex items-center justify-center" style={{ minHeight: 180 }}>
-                    <div className="text-center">
-                      <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold" style={{ background: `${color}15`, color }}>{label}</span>
-                      <p className="text-[11px] font-mono mt-3" style={{ color: "rgba(255,255,255,0.35)" }}>No signals for this timeframe</p>
-                    </div>
-                  </div>
-                </div>
-              );
-            }
-            return <HedgedEquityCard key={label} tfPairs={tfPairs} label={label} color={color} prices={prices} />;
-            }; // end buildCard
-
-            return (
-              <div className="flex gap-3 mb-4 flex-wrap">
-                {mainTfs.map(tc => {
-                  const tfPairs = pairsByTf[tc.key] || [];
-                  return buildCard(tfPairs, tc.label, tc.color);
-                })}
+          {/* ── Returns — Natural Pairs ── */}
+          {backtestData && (
+            <div className="mb-4">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-[11px] font-mono font-bold text-white/80">{timeframe === "ALL" ? "2-Month" : timeframe} Returns</span>
+                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded" style={{ background: "rgba(34,197,94,0.08)", color: GREEN }}>Natural Pairs</span>
+                <span className="text-[9px] font-mono text-white/40">Same-bar opposite signals on different coins</span>
               </div>
-            );
-          })()}
-
-          {/* Strategy params for hedged view */}
-          {Object.keys(strategyInfo).length > 0 && (
-            <div className="flex gap-3 mb-4 flex-wrap">
-              {[
-                { tfKey: "1M", color: "#3b82f6" },
-                { tfKey: "1H", color: "#a78bfa" },
-                { tfKey: "1D", color: GOLD },
-              ].map(tf => {
-                const strat = strategyInfo[tf.tfKey];
-                if (!strat) return null;
-                return (
-                  <div key={tf.tfKey} className="flex-1 min-w-[320px]">
-                    <div className="px-2 py-1.5 rounded-lg text-[9px] font-mono leading-relaxed flex flex-wrap items-center gap-x-2 gap-y-0.5" style={{ background: "rgba(255,255,255,0.02)", color: "rgba(255,255,255,0.45)" }}>
-                      <span style={{ color: tf.color }}>{strat.name}</span>
-                      <span style={{ color: "rgba(255,255,255,0.25)" }}>·</span>
-                      <span style={{ color: GREEN }}>Hedged</span>
-                      <span style={{ color: "rgba(255,255,255,0.25)" }}>·</span>
-                      <span>C{strat.cycleMin}-{strat.cycleMax}</span>
-                      <span style={{ color: "rgba(255,255,255,0.25)" }}>·</span>
-                      <span>hold÷{strat.holdDiv}</span>
-                      {[
-                        { label: "spike", on: !!strat.spike },
-                        { label: "nearMiss", on: !!strat.nearMiss },
-                        { label: "priceExt", on: !!strat.priceExt },
-                      ].map(f => (
-                        <span key={f.label} className="inline-flex items-center gap-0.5">
+              <div className="flex gap-3 flex-wrap">
+                {[
+                  { key: "1m", label: "1M", color: "#3b82f6", tfKey: "1M" },
+                  { key: "1h", label: "1H", color: "#a78bfa", tfKey: "1H" },
+                  { key: "1d", label: "1D", color: GOLD, tfKey: "1D" },
+                ].map(tf => {
+                  const data = backtestData[tf.key];
+                  const strat = strategyInfo[tf.tfKey];
+                  if (!data || data.curve.length < 2) {
+                    return (
+                      <div key={tf.key} className="flex-1 min-w-[320px] rounded-xl overflow-hidden" style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${tf.color}25` }}>
+                        <div className="flex items-center justify-center" style={{ minHeight: 180 }}>
+                          <div className="text-center">
+                            <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold" style={{ background: `${tf.color}15`, color: tf.color }}>{tf.label}</span>
+                            <p className="text-[11px] font-mono mt-3" style={{ color: "rgba(255,255,255,0.35)" }}>No backtest data</p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div key={tf.key} className="flex-1 min-w-[320px]">
+                      <BacktestEquityCard curve={data.curve} stats={data.stats} label={tf.label} color={tf.color} />
+                      {strat && (
+                        <div className="mt-1 px-2 py-1.5 rounded-b-lg text-[9px] font-mono leading-relaxed flex flex-wrap items-center gap-x-2 gap-y-0.5" style={{ background: "rgba(255,255,255,0.02)", color: "rgba(255,255,255,0.45)" }}>
+                          <span style={{ color: tf.color }}>{strat.name}</span>
                           <span style={{ color: "rgba(255,255,255,0.25)" }}>·</span>
-                          <span style={{ color: f.on ? GREEN : RED, fontSize: 8, lineHeight: 1 }}>{f.on ? "✓" : "✗"}</span>
-                          <span style={{ color: f.on ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.25)" }}>{f.label}</span>
-                        </span>
-                      ))}
-                      {strat.config?.coin_universe && (
-                        <><span style={{ color: "rgba(255,255,255,0.25)" }}>·</span><span>{strat.config.coin_universe.length} coins</span></>
+                          <span style={{ color: GOLD }}>Hedged</span>
+                          <span style={{ color: "rgba(255,255,255,0.25)" }}>·</span>
+                          <span>C{strat.cycleMin}-{strat.cycleMax}</span>
+                          <span style={{ color: "rgba(255,255,255,0.25)" }}>·</span>
+                          <span>hold÷{strat.holdDiv}</span>
+                          {[
+                            { label: "spike", on: !!strat.spike },
+                            { label: "nearMiss", on: !!strat.nearMiss },
+                            { label: "priceExt", on: !!strat.priceExt },
+                          ].map(f => (
+                            <span key={f.label} className="inline-flex items-center gap-0.5">
+                              <span style={{ color: "rgba(255,255,255,0.25)" }}>·</span>
+                              <span style={{ color: f.on ? GREEN : RED, fontSize: 8, lineHeight: 1 }}>{f.on ? "✓" : "✗"}</span>
+                              <span style={{ color: f.on ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.25)" }}>{f.label}</span>
+                            </span>
+                          ))}
+                          {strat.config?.coin_universe && (
+                            <><span style={{ color: "rgba(255,255,255,0.25)" }}>·</span><span>{strat.config.coin_universe.length} coins</span></>
+                          )}
+                        </div>
                       )}
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
           )}
 
@@ -1487,71 +1638,107 @@ export default function SignalsPage() {
           <div className="flex gap-4" style={{ alignItems: "flex-start" }}>
             {/* Left: Pair list */}
             <div className="flex-1 min-w-0">
-          {hedgedData?.pairs?.length === 0 && (
-            <div className="text-center py-12 font-mono text-sm" style={{ color: "rgba(255,255,255,0.4)" }}>
-              No hedged pairs yet. Pairs form when opposite-direction signals fire on different coins within the gap window.
-            </div>
-          )}
-          <div className="space-y-2">
-            {hedgedData?.pairs?.map((p: any) => {
-              const isClosed = p.status === "closed";
-              // Use actual pair_return for closed, compute MTM for open
-              let pairRet = p.pair_return;
-              if (pairRet == null && p.legA && p.legB) {
-                const cpA = prices[p.legA.symbol];
-                const cpB = prices[p.legB.symbol];
-                let mtm = 0; let hasMtm = false;
-                if (cpA && p.legA.entryPrice) { mtm += p.legA.direction === "LONG" ? (cpA / p.legA.entryPrice - 1) * 100 : (p.legA.entryPrice / cpA - 1) * 100; hasMtm = true; }
-                if (cpB && p.legB.entryPrice) { mtm += p.legB.direction === "LONG" ? (cpB / p.legB.entryPrice - 1) * 100 : (p.legB.entryPrice / cpB - 1) * 100; hasMtm = true; }
-                if (hasMtm) pairRet = mtm;
+          {(() => {
+            // Merge pairs from all timeframes, sorted newest-first
+            const allPairs: any[] = [];
+            if (backtestData) {
+              for (const [key, data] of Object.entries(backtestData)) {
+                for (const p of data.pairs || []) {
+                  allPairs.push({ ...p, _tf: key });
+                }
               }
+            }
+            allPairs.sort((a, b) => new Date(b.legA.createdAt).getTime() - new Date(a.legA.createdAt).getTime());
+            if (allPairs.length === 0) return (
+              <div className="text-center py-12 font-mono text-sm" style={{ color: "rgba(255,255,255,0.4)" }}>
+                No hedged pairs in this window.
+              </div>
+            );
+            return (
+          <div className="space-y-1.5">
+            {allPairs.slice(0, 100).map((p: any) => {
+              const isClosed = p.status === "closed";
+              const isPairExpanded = expandedPairId === p.pair_id;
+              let pairRet = p.pair_return;
               const borderColor = pairRet == null ? "rgba(255,255,255,0.08)" : pairRet > 0 ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)";
+
+              const barMinsA = p.legA.barMinutes || 60;
+              const periodicity = barMinsA <= 1 ? "1M" : barMinsA <= 60 ? "1H" : "1D";
+              const tfColor = periodicity === "1M" ? "#3b82f6" : periodicity === "1H" ? "#a78bfa" : GOLD;
+
+              const fmtPrice = (v: number) => v > 100 ? v.toFixed(2) : v.toFixed(4);
+              const exitA = p.legA.exitPrice || prices[p.legA.symbol];
+              const exitB = p.legB.exitPrice || prices[p.legB.symbol];
+
               return (
-                <div key={p.pair_id} className="rounded-xl p-3 flex items-center gap-4 flex-wrap" style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${borderColor}` }}>
-                  {/* Leg A */}
-                  <div className="flex items-center gap-2 min-w-[140px]">
-                    <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded" style={{
+                <React.Fragment key={p.pair_id}>
+                  <div
+                    className="rounded-xl p-3 flex items-center gap-3 cursor-pointer hover:brightness-110 transition-all"
+                    style={{ background: isClosed ? "rgba(255,255,255,0.02)" : "rgba(59,130,246,0.06)", border: `1px solid ${isClosed ? borderColor : "rgba(59,130,246,0.2)"}` }}
+                    onClick={() => setExpandedPairId(isPairExpanded ? null : p.pair_id)}
+                  >
+                    {/* Leg A: direction + coin + entry→exit */}
+                    <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0" style={{
                       background: p.legA.direction === "LONG" ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)",
                       color: p.legA.direction === "LONG" ? GREEN : RED,
                     }}>{p.legA.direction[0]}</span>
-                    <span className="text-[12px] font-mono font-bold text-white">{p.legA.symbol?.replace("USDT", "")}</span>
-                    {p.legA.returnPct != null && (
-                      <span className="text-[10px] font-mono tabular-nums" style={{ color: p.legA.returnPct > 0 ? GREEN : RED }}>
-                        {p.legA.returnPct > 0 ? "+" : ""}{(+p.legA.returnPct).toFixed(2)}%
-                      </span>
-                    )}
-                  </div>
-                  {/* Arrow */}
-                  <span className="text-[10px] font-mono" style={{ color: GOLD }}>+</span>
-                  {/* Leg B */}
-                  <div className="flex items-center gap-2 min-w-[140px]">
-                    <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded" style={{
+                    <span className="text-[12px] font-mono font-bold text-white shrink-0">{p.legA.symbol?.replace("USDT", "")}</span>
+                    <div className="text-[9px] font-mono tabular-nums hidden sm:flex items-center gap-1" style={{ color: "rgba(255,255,255,0.45)" }}>
+                      <span>{p.legA.entryPrice ? fmtPrice(p.legA.entryPrice) : "—"}</span>
+                      <span style={{ color: "rgba(255,255,255,0.15)" }}>→</span>
+                      <span>{exitA ? fmtPrice(exitA) : "—"}</span>
+                    </div>
+
+                    {/* Connector */}
+                    <span className="text-[10px] font-mono shrink-0" style={{ color: GOLD }}>+</span>
+
+                    {/* Leg B: direction + coin + entry→exit */}
+                    <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0" style={{
                       background: p.legB.direction === "LONG" ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)",
                       color: p.legB.direction === "LONG" ? GREEN : RED,
                     }}>{p.legB.direction[0]}</span>
-                    <span className="text-[12px] font-mono font-bold text-white">{p.legB.symbol?.replace("USDT", "")}</span>
-                    {p.legB.returnPct != null && (
-                      <span className="text-[10px] font-mono tabular-nums" style={{ color: p.legB.returnPct > 0 ? GREEN : RED }}>
-                        {p.legB.returnPct > 0 ? "+" : ""}{(+p.legB.returnPct).toFixed(2)}%
-                      </span>
-                    )}
-                  </div>
-                  {/* Pair return */}
-                  <div className="flex-1" />
-                  <div className="text-right">
-                    <div className="text-[16px] font-mono font-black tabular-nums" style={{
+                    <span className="text-[12px] font-mono font-bold text-white shrink-0">{p.legB.symbol?.replace("USDT", "")}</span>
+                    <div className="text-[9px] font-mono tabular-nums hidden sm:flex items-center gap-1" style={{ color: "rgba(255,255,255,0.45)" }}>
+                      <span>{p.legB.entryPrice ? fmtPrice(p.legB.entryPrice) : "—"}</span>
+                      <span style={{ color: "rgba(255,255,255,0.15)" }}>→</span>
+                      <span>{exitB ? fmtPrice(exitB) : "—"}</span>
+                    </div>
+
+                    {/* TF badge */}
+                    <span className="text-[8px] font-mono font-bold px-1 py-0.5 rounded shrink-0" style={{
+                      background: `${tfColor}15`, color: tfColor,
+                    }}>{periodicity}</span>
+
+                    <div className="flex-1" />
+
+                    {/* Status: date + entry→exit time */}
+                    <span className="text-[9px] font-mono tabular-nums shrink-0" style={{ color: "rgba(255,255,255,0.3)" }}>
+                      {new Date(p.legA.createdAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short" })} {new Date(p.legA.createdAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
+                      {p.legA.closedAt && (<>
+                        <span style={{ color: "rgba(255,255,255,0.15)" }}> → </span>
+                        {new Date(p.legA.closedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
+                      </>)}
+                    </span>
+
+                    {/* Combined return */}
+                    <span className="text-[15px] font-mono font-black tabular-nums shrink-0 min-w-[70px] text-right" style={{
                       color: pairRet != null ? (pairRet > 0 ? GREEN : pairRet < 0 ? RED : "rgba(255,255,255,0.5)") : "rgba(255,255,255,0.3)"
                     }}>
                       {pairRet != null ? `${pairRet > 0 ? "+" : ""}${(+pairRet).toFixed(2)}%` : "—"}
-                    </div>
-                    <div className="text-[9px] font-mono" style={{ color: "rgba(255,255,255,0.3)" }}>
-                      {isClosed ? "closed" : "live"} · {new Date(p.legA.createdAt).toLocaleDateString()}
-                    </div>
+                    </span>
                   </div>
-                </div>
+                  {/* Expanded: rebased dual-coin OHLC chart */}
+                  {isPairExpanded && !p.pair_id.startsWith("1m-") && !p.pair_id.startsWith("1h-") && !p.pair_id.startsWith("1d-") && (
+                    <div className="rounded-xl p-3 -mt-0.5" style={{ background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.04)" }}>
+                      <PairChart pairId={p.pair_id} />
+                    </div>
+                  )}
+                </React.Fragment>
               );
             })}
           </div>
+            );
+          })()}
             </div>{/* end left pair list */}
 
             {/* Right: Net Position + Daily Performance — hedged signals only (desktop) */}

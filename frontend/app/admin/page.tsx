@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
+import { adminFetch } from "@/lib/admin-fetch";
 
 const FracmapScanner = dynamic(() => import("@/components/FracmapScanner"), { ssr: false });
 const FracmapLive = dynamic(() => import("@/components/FracmapLive"), { ssr: false });
@@ -23,18 +24,30 @@ type AdminTab = "live" | "scanner" | "signals" | "topo" | "research" | "docs" | 
 export default function AdminPage() {
   const [tab, setTab] = useState<AdminTab>("live");
   const [auth, setAuth] = useState(false);
-  const [pin, setPin] = useState("");
+  const [token, setToken] = useState("");
+  const [authError, setAuthError] = useState(false);
 
   useEffect(() => {
-    const saved = sessionStorage.getItem("ntlgnc_admin");
-    if (saved === "1") setAuth(true);
+    const saved = sessionStorage.getItem("fracmap_admin_token");
+    if (saved) {
+      // Validate saved token against server
+      fetch("/api/admin/ops", { headers: { Authorization: `Bearer ${saved}` } })
+        .then(r => { if (r.ok) setAuth(true); else sessionStorage.removeItem("fracmap_admin_token"); })
+        .catch(() => {});
+    }
   }, []);
 
-  const handleAuth = () => {
-    if (pin === (process.env.NEXT_PUBLIC_ADMIN_PIN || "1234")) {
-      setAuth(true);
-      sessionStorage.setItem("ntlgnc_admin", "1");
-    }
+  const handleAuth = async () => {
+    setAuthError(false);
+    try {
+      const res = await fetch("/api/admin/ops", { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) {
+        setAuth(true);
+        sessionStorage.setItem("fracmap_admin_token", token);
+      } else {
+        setAuthError(true);
+      }
+    } catch { setAuthError(true); }
   };
 
   if (!auth) {
@@ -42,11 +55,12 @@ export default function AdminPage() {
       <div className="min-h-[80vh] flex items-center justify-center">
         <div className="p-6 rounded-xl" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(212,168,67,0.2)" }}>
           <div className="text-sm font-mono font-bold mb-3" style={{ color: "#D4A843" }}>Admin Access</div>
-          <input type="password" value={pin} onChange={e => setPin(e.target.value)} onKeyDown={e => e.key === "Enter" && handleAuth()}
-            className="px-3 py-2 rounded text-sm font-mono bg-[#0a0a1a] text-white w-48"
-            style={{ border: "1px solid rgba(212,168,67,0.2)" }}
-            placeholder="PIN" autoFocus />
+          <input type="password" value={token} onChange={e => setToken(e.target.value)} onKeyDown={e => e.key === "Enter" && handleAuth()}
+            className="px-3 py-2 rounded text-sm font-mono bg-[#0a0a1a] text-white w-64"
+            style={{ border: `1px solid ${authError ? "#ef4444" : "rgba(212,168,67,0.2)"}` }}
+            placeholder="Admin token" autoFocus />
           <button onClick={handleAuth} className="ml-2 px-4 py-2 rounded text-sm font-mono font-bold" style={{ background: "#D4A843", color: "#000" }}>→</button>
+          {authError && <div className="text-[10px] font-mono text-red-400 mt-2">Invalid token</div>}
         </div>
       </div>
     );
@@ -99,7 +113,7 @@ export default function AdminPage() {
         </div>
         <div className="flex-1" />
         <a href="/" className="text-xs font-mono transition-colors" style={{ color: "rgba(255,255,255,0.4)" }}>← Public site</a>
-        <button onClick={() => { sessionStorage.removeItem("ntlgnc_admin"); setAuth(false); }}
+        <button onClick={() => { sessionStorage.removeItem("fracmap_admin"); setAuth(false); }}
           className="ml-3 text-xs font-mono transition-colors" style={{ color: "rgba(255,255,255,0.4)" }}>
           Logout
         </button>
@@ -141,7 +155,7 @@ function OpsPanel() {
 
   const fetchHealth = useCallback(async () => {
     try {
-      const res = await fetch("/api/admin/exec");
+      const res = await adminFetch("/api/admin/exec");
       const d = await res.json();
       if (!d.error) setHealth(d);
       setLastCheck(new Date());
@@ -158,7 +172,7 @@ function OpsPanel() {
     setRunning(id);
     setOutput("Running...");
     try {
-      const res = await fetch("/api/admin/exec", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+      const res = await adminFetch("/api/admin/exec", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
       const d = await res.json();
       setOutput(d.output || d.error || JSON.stringify(d));
       setTimeout(fetchHealth, 3000);
@@ -591,7 +605,7 @@ function SqlConsole() {
 
   const run = async () => {
     try {
-      const res = await fetch("/api/admin/sql", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sql }) });
+      const res = await adminFetch("/api/admin/sql", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sql }) });
       const d = await res.json();
       setResult(JSON.stringify(d, null, 2));
       setCopied(false);

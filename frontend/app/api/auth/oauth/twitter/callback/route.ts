@@ -82,7 +82,7 @@ export async function GET(req: Request) {
       return errorRedirect("no_twitter_user");
     }
 
-    const twitterEmail = `${twitterUser.username}@twitter.ntlgnc.local`;
+    const twitterEmail = `${twitterUser.username}@twitter.fracmap.local`;
     const displayName = twitterUser.name || twitterUser.username;
 
     // 3. Create or get user in database

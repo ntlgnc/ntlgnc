@@ -14,8 +14,8 @@
   --border: #24243e;
   --border-bright: #34345a;
   --text: #e4e4ed;
-  --text-muted: #9898b0;
-  --text-dim: #6e6e8a;
+  --text-muted: #b8b8cc;
+  --text-dim: #b0b0c8;
   --openai: #00d67d;
   --openai-dim: rgba(0,214,125,0.12);
   --claude: #a78bfa;
@@ -191,4 +191,27 @@ body::before {
   .text-dim   { color: var(--text-dim); }
   .bg-brand   { background-color: var(--brand); }
   .border-brand { border-color: var(--brand); }
+}
+
+/* ─── READABILITY FIXES ─── */
+/* Global minimum text brightness on dark backgrounds.
+   Tailwind's white/XX opacity classes produce near-invisible text
+   on our dark theme. This sets a floor on all text opacity. */
+body {
+  --min-text-alpha: 0.55;
+}
+
+/* Override Tailwind's white opacity text classes at the property level */
+[class*="text-white\/1"],
+[class*="text-white\/2"],
+[class*="text-white\/30"],
+[class*="text-white\/35"] {
+  color: rgba(255, 255, 255, 0.70) !important;
+}
+[class*="text-white\/40"],
+[class*="text-white\/45"] {
+  color: rgba(255, 255, 255, 0.72) !important;
+}
+[class*="text-white\/50"] {
+  color: rgba(255, 255, 255, 0.75) !important;
 }

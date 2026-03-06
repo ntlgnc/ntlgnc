@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { adminFetch } from "@/lib/admin-fetch";
 
 /* ═══════════════════════════════════════════════════════════════
    FRACMAP TOPOGRAPHY MODEL
@@ -13,158 +14,8 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
    Generates ensemble signals: only 1 long or 1 short at a time.
    ═══════════════════════════════════════════════════════════════ */
 
-const PHI = 1.618034;
 const GOLD = "#D4A843";
 const GOLD_DIM = "rgba(212,168,67,0.15)";
-
-// ── Core fracmap computation ──
-function computeFracmap(highs: number[], lows: number[], cycle: number, order: number) {
-  const zfracR = Math.round(cycle / 3.0);  // Original: cycle/(1+2*order) with order=1 → cycle/3
-  const phiO = Math.pow(PHI, order);
-  const n = highs.length;
-  const forwardBars = Math.round(cycle / 3);
-  const totalLen = n + forwardBars;
-  const lower: (number | null)[] = new Array(totalLen).fill(null);
-  const upper: (number | null)[] = new Array(totalLen).fill(null);
-  const minIdx = (order + 1) * zfracR;
-
-  for (let i = minIdx; i < totalLen; i++) {
-    const start = i - (order + 1) * zfracR;
-    const end = i - order * zfracR;
-    // start must be in real data; clamp end to last available bar
-    if (start < 0 || start >= n) continue;
-    const clampEnd = Math.min(end, n - 1);
-    if (clampEnd < start) continue;
-
-    let wMax = -Infinity, wMin = Infinity;
-    for (let j = start; j <= clampEnd; j++) {
-      wMax = Math.max(wMax, highs[j], lows[j]);
-      wMin = Math.min(wMin, highs[j], lows[j]);
-    }
-    lower[i] = (1 - phiO) * wMax + phiO * wMin;
-    upper[i] = (1 - phiO) * wMin + phiO * wMax;
-  }
-  return { lower, upper, forwardBars };
-}
-
-// ── Ensemble signal detection ──
-function detectEnsembleSignals(bars: any[], allBands: any[], minStrength = 1, minMaxCycle = 0, spikeFilter = false, holdDivisor = 2, nearMiss = false) {
-  const signals: any[] = [];
-  let position: any = null;
-  const n = bars.length;
-
-  // Helper: check if value at index i is the max within [i-window, i+window]
-  // Band values are causal (computed from past prices only), so symmetric window is safe
-  function isLocalMax(arr: (number | null)[], i: number, window: number): boolean {
-    const val = arr[i];
-    if (val === null) return false;
-    for (let j = Math.max(0, i - window); j <= Math.min(arr.length - 1, i + window); j++) {
-      if (j === i) continue;
-      if (arr[j] !== null && (arr[j] as number) > val) return false;
-    }
-    return true;
-  }
-
-  // Helper: check if value at index i is the min within [i-window, i+window]
-  function isLocalMin(arr: (number | null)[], i: number, window: number): boolean {
-    const val = arr[i];
-    if (val === null) return false;
-    for (let j = Math.max(0, i - window); j <= Math.min(arr.length - 1, i + window); j++) {
-      if (j === i) continue;
-      if (arr[j] !== null && (arr[j] as number) < val) return false;
-    }
-    return true;
-  }
-
-  for (let i = 1; i < n; i++) {
-    if (position && i >= position.exitIdx) {
-      const exitPrice = bars[i].close;
-      const ret = position.type === "LONG"
-        ? (exitPrice / position.entryPrice - 1) * 100
-        : (position.entryPrice / exitPrice - 1) * 100;
-      signals.push({
-        ...position, exitPrice, exitActualIdx: i,
-        returnPct: +ret.toFixed(3), won: ret > 0,
-      });
-      position = null;
-    }
-
-    if (position) continue;
-
-    let buyStrength = 0, sellStrength = 0;
-    let maxBuyCycle = 0, maxSellCycle = 0;
-    let maxBuyOrder = 0, maxSellOrder = 0;
-
-    for (const band of allBands) {
-      const lo = band.lower[i];
-      const up = band.upper[i];
-      if (lo === null || up === null) continue;
-      if (up <= lo) continue;
-      const spikeWindow = Math.round(band.cycle / 3);
-
-      const buyAtI = bars[i].low < lo && bars[i].close > lo;
-      const buyNear = nearMiss && !buyAtI && (
-        (i > 0 && band.lower[i - 1] !== null && bars[i - 1].low < (band.lower[i - 1] as number) && bars[i - 1].close > (band.lower[i - 1] as number))
-      );
-      if (buyAtI || buyNear) {
-        if (spikeFilter) {
-          const spikeHere = isLocalMax(band.lower, i, spikeWindow);
-          const spikeNear = nearMiss && (isLocalMax(band.lower, i - 1, spikeWindow) || isLocalMax(band.lower, i + 1, spikeWindow));
-          if (!spikeHere && !spikeNear) continue;
-        }
-        buyStrength++;
-        if (band.cycle > maxBuyCycle) maxBuyCycle = band.cycle;
-        if (band.order > maxBuyOrder) maxBuyOrder = band.order;
-      }
-
-      const sellAtI = bars[i].high > up && bars[i].close < up;
-      const sellNear = nearMiss && !sellAtI && (
-        (i > 0 && band.upper[i - 1] !== null && bars[i - 1].high > (band.upper[i - 1] as number) && bars[i - 1].close < (band.upper[i - 1] as number))
-      );
-      if (sellAtI || sellNear) {
-        if (spikeFilter) {
-          const spikeHere = isLocalMin(band.upper, i, spikeWindow);
-          const spikeNear = nearMiss && (isLocalMin(band.upper, i - 1, spikeWindow) || isLocalMin(band.upper, i + 1, spikeWindow));
-          if (!spikeHere && !spikeNear) continue;
-        }
-        sellStrength++;
-        if (band.cycle > maxSellCycle) maxSellCycle = band.cycle;
-        if (band.order > maxSellOrder) maxSellOrder = band.order;
-      }
-    }
-
-    if (buyStrength >= minStrength && maxBuyCycle >= minMaxCycle && buyStrength >= sellStrength) {
-      const holdDuration = Math.round(maxBuyCycle / holdDivisor);
-      position = {
-        type: "LONG", entryIdx: i, entryPrice: bars[i].close,
-        exitIdx: Math.min(i + holdDuration, n - 1),
-        holdDuration, maxCycle: maxBuyCycle, maxOrder: maxBuyOrder,
-        time: bars[i].time, strength: buyStrength,
-      };
-    } else if (sellStrength >= minStrength && maxSellCycle >= minMaxCycle) {
-      const holdDuration = Math.round(maxSellCycle / holdDivisor);
-      position = {
-        type: "SHORT", entryIdx: i, entryPrice: bars[i].close,
-        exitIdx: Math.min(i + holdDuration, n - 1),
-        holdDuration, maxCycle: maxSellCycle, maxOrder: maxSellOrder,
-        time: bars[i].time, strength: sellStrength,
-      };
-    }
-  }
-
-  if (position) {
-    const exitPrice = bars[n - 1].close;
-    const ret = position.type === "LONG"
-      ? (exitPrice / position.entryPrice - 1) * 100
-      : (position.entryPrice / exitPrice - 1) * 100;
-    signals.push({
-      ...position, exitPrice, exitActualIdx: n - 1,
-      returnPct: +ret.toFixed(3), won: ret > 0,
-    });
-  }
-
-  return signals;
-}
 
 // ── Color palette for different orders ──
 const ORDER_COLORS: Record<number, { base: string }> = {
@@ -209,98 +60,70 @@ export default function FracmapTopography() {
   const [apiLoading, setApiLoading] = useState(false);
   const svgRef = useRef<SVGSVGElement>(null);
 
-  // Load data from API on mount
+  // Computed results from server-side API
+  const [allBands, setAllBands] = useState<any[]>([]);
+  const [signals, setSignals] = useState<any[]>([]);
+  const [metrics, setMetrics] = useState<any>(null);
+  const [maxForward, setMaxForward] = useState(0);
+  const [computing, setComputing] = useState(false);
+
+  // Load coins + initial data on mount
   useEffect(() => {
     loadFromApi();
     fetch("/api/coins").then(r => r.json()).then(d => { if (d.coins?.length > 0) setAllCoins(d.coins); }).catch(() => {});
   }, []);
 
-  // Compute all bands
-  const { allBands, signals, metrics, maxForward } = useMemo(() => {
-    if (bars.length === 0) return { allBands: [] as any[], signals: [] as any[], metrics: null, maxForward: 0 };
-
-    const highs = bars.map((b: any) => b.high);
-    const lows = bars.map((b: any) => b.low);
-    const bands: any[] = [];
-    let mf = 0;
-
-    for (const order of enabledOrders) {
-      for (let cycle = cycleRange[0]; cycle <= cycleRange[1]; cycle += cycleStep) {
-        const { lower, upper, forwardBars } = computeFracmap(highs, lows, cycle, order);
-        bands.push({ cycle, order, lower, upper, forwardBars });
-        if (forwardBars > mf) mf = forwardBars;
-      }
-    }
-
-    const sigs = detectEnsembleSignals(bars, bands, minStrength, minCycle, spikeFilter, holdDivisor, nearMiss);
-
-    // Add cumulative return to each signal
-    let cumEquity = 1;
-    for (const sig of sigs) {
-      cumEquity *= (1 + sig.returnPct / 100);
-      sig.cumReturn = +((cumEquity - 1) * 100).toFixed(3);
-    }
-
-    const rets = sigs.map((s: any) => s.returnPct);
-    const wins = rets.filter((r: number) => r > 0);
-    const totalRet = rets.reduce((s: number, r: number) => s + r, 0);
-    const avgRet = rets.length > 0 ? totalRet / rets.length : 0;
-    const winRate = rets.length > 0 ? (wins.length / rets.length * 100) : 0;
-
-    // Annualised Sharpe = (mean / std) × √(525600 / avg_trade_minutes)
-    const MINS_PER_YEAR = 525600;
-    const std = rets.length > 1 ? Math.sqrt(rets.reduce((s: number, r: number) => s + (r - avgRet) ** 2, 0) / rets.length) : 0;
-    const avgHoldMins = sigs.length > 0
-      ? sigs.reduce((s: number, sig: any) => s + sig.holdDuration * apiBarMin, 0) / sigs.length
-      : 1;
-    const annFactor = Math.sqrt(MINS_PER_YEAR / avgHoldMins);
-    const sharpe = std > 0 ? (avgRet / std) * annFactor : 0;
-
-    let equity = 1, peak = 1, maxDD = 0;
-    for (const r of rets) {
-      equity *= (1 + r / 100);
-      if (equity > peak) peak = equity;
-      const dd = (peak - equity) / peak;
-      if (dd > maxDD) maxDD = dd;
-    }
-
-    return {
-      allBands: bands,
-      signals: sigs,
-      maxForward: mf,
-      metrics: {
-        trades: sigs.length,
-        longs: sigs.filter((s: any) => s.type === "LONG").length,
-        shorts: sigs.filter((s: any) => s.type === "SHORT").length,
-        winRate: +winRate.toFixed(1),
-        avgRet: +avgRet.toFixed(3),
-        totalRet: +((equity - 1) * 100).toFixed(2),
-        maxDD: +(maxDD * 100).toFixed(2),
-        sharpe: +sharpe.toFixed(3),
-        bandCount: bands.length,
-      },
-    };
+  // Compute bands + signals via server API whenever params change
+  const computeRef = useRef(0);
+  useEffect(() => {
+    if (bars.length === 0) { setAllBands([]); setSignals([]); setMetrics(null); setMaxForward(0); return; }
+    const seq = ++computeRef.current;
+    setComputing(true);
+    adminFetch("/api/fracmap/compute", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "topography", bars, barMinutes: apiBarMin,
+        cycleMin: cycleRange[0], cycleMax: cycleRange[1], cycleStep,
+        enabledOrders, minStr: minStrength, minCyc: minCycle,
+        spike: spikeFilter, nearMiss, holdDiv: holdDivisor,
+      }),
+    }).then(r => r.json()).then(data => {
+      if (seq !== computeRef.current) return; // stale
+      setAllBands(data.bands || []);
+      setSignals(data.signals || []);
+      setMetrics(data.metrics || null);
+      setMaxForward(data.maxForward || 0);
+    }).catch(err => { console.error("Topography compute error:", err); })
+    .finally(() => { if (seq === computeRef.current) setComputing(false); });
   }, [bars, cycleRange, cycleStep, enabledOrders, minStrength, minCycle, spikeFilter, nearMiss, holdDivisor, apiBarMin]);
 
-  // Load from API (uses your existing /api/fracmap candle data)
+  // Load from API (fetches candles which triggers compute via useEffect above)
   const loadFromApi = useCallback(async () => {
     setApiLoading(true);
     try {
-      // Fetch chart data for a single cycle just to get candles
-      const res = await fetch(`/api/fracmap?action=chart&symbol=${apiSymbol}&barMinutes=${apiBarMin}&cycle=75&order=1&limit=2000`);
+      const res = await adminFetch(`/api/fracmap/compute`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "topography", symbol: apiSymbol, barMinutes: apiBarMin, limit: 2000,
+          cycleMin: cycleRange[0], cycleMax: cycleRange[1], cycleStep,
+          enabledOrders, minStr: minStrength, minCyc: minCycle,
+          spike: spikeFilter, nearMiss, holdDiv: holdDivisor,
+        }),
+      });
       const data = await res.json();
-      if (data.bars && data.bars.length > 50) {
-        const loaded = data.bars.map((b: any) => ({
-          time: b.time, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume || 0,
-        }));
-        setBars(loaded);
+      if (data.bars?.length > 50) {
+        setBars(data.bars);
+        setAllBands(data.bands || []);
+        setSignals(data.signals || []);
+        setMetrics(data.metrics || null);
+        setMaxForward(data.maxForward || 0);
         setViewStart(0);
       }
     } catch (err) {
       console.error("Failed to load from API:", err);
     }
     setApiLoading(false);
-  }, [apiSymbol, apiBarMin, viewBars]);
+  }, [apiSymbol, apiBarMin, cycleRange, cycleStep, enabledOrders, minStrength, minCycle, spikeFilter, nearMiss, holdDivisor]);
 
   const loadPastedData = useCallback(() => {
     try {
@@ -957,7 +780,7 @@ export default function FracmapTopography() {
           {enabledOrders.map(o => (
             <span key={o} className="flex items-center gap-1">
               <span className="w-3 h-2 rounded-sm inline-block" style={{ background: ORDER_HEX[o] + "30", border: `1px solid ${ORDER_HEX[o]}50` }} />
-              <span style={{ color: ORDER_HEX[o] }}>o{o} φ^{o}={Math.pow(PHI, o).toFixed(2)}</span>
+              <span style={{ color: ORDER_HEX[o] }}>o{o} φ^{o}={Math.pow(1.618034, o).toFixed(2)}</span>
             </span>
           ))}
           <span className="text-[var(--border)]">|</span>

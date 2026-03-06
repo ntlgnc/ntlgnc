@@ -46,7 +46,7 @@ export default function AuthModal() {
         <div className="p-6">
           <h2 className="text-xl font-bold mb-1">{mode === "register" ? "Create Account" : "Sign In"}</h2>
           <p className="text-sm opacity-60 mb-4">
-            {mode === "register" ? "Join ntlgnc to access AI predictions" : "Welcome back"}
+            {mode === "register" ? "Join fracmap to access AI predictions" : "Welcome back"}
           </p>
 
           {/* OAuth buttons */}

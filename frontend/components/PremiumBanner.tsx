@@ -3,6 +3,10 @@
 import { useAuth } from "./AuthContext";
 
 export default function PremiumBanner() {
+  // Premium upsell disabled — site is now a free marketing showcase (FSA compliance)
+  return null;
+
+  /* eslint-disable no-unreachable */
   const { user, activateTrial, startCheckout, setShowAuthModal } = useAuth();
 
   if (user.subscription === "premium") return null;

@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { Client } from "pg";
+import { validateAdminRequest, unauthorizedResponse } from "@/lib/admin-auth";
 
 function getClient() {
   const conn = process.env.DATABASE_URL;
@@ -8,7 +9,8 @@ function getClient() {
 }
 
 // ── GET: list strategies or get signals ──
-export async function GET(req: Request) {
+export async function GET(req: NextRequest) {
+  if (!validateAdminRequest(req)) return unauthorizedResponse();
   const url = new URL(req.url);
   const action = url.searchParams.get("action") || "list";
   const client = getClient();
@@ -68,7 +70,8 @@ export async function GET(req: Request) {
 }
 
 // ── POST: save strategy, record signal, update signal ──
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
+  if (!validateAdminRequest(req)) return unauthorizedResponse();
   const body = await req.json();
   const action = body.action;
   const client = getClient();
@@ -81,7 +84,7 @@ export async function POST(req: Request) {
         name, type = "universal", barMinutes = 1, symbol = null,
         minStr, minCyc, spike, nearMiss, holdDiv, priceExt,
         isSharpe, oosSharpe, bootP, winRate, profitFactor, consistency, totalTrades, splitPct,
-        cycleMin, cycleMax
+        cycleMin, cycleMax, config
       } = body;
 
       if (!name || minStr == null || minCyc == null || holdDiv == null) {
@@ -100,13 +103,13 @@ export async function POST(req: Request) {
           ("name", "type", "barMinutes", "symbol",
            "minStr", "minCyc", "spike", "nearMiss", "holdDiv", "priceExt",
            "isSharpe", "oosSharpe", "bootP", "winRate", "profitFactor", "consistency", "totalTrades", "splitPct",
-           "cycleMin", "cycleMax")
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+           "cycleMin", "cycleMax", "config")
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
          RETURNING *`,
         [name, type, barMinutes, symbol,
          minStr, minCyc, spike ?? true, nearMiss ?? true, holdDiv, priceExt ?? false,
          isSharpe, oosSharpe, bootP, winRate, profitFactor, consistency, totalTrades, splitPct,
-         cycleMin ?? 5, cycleMax ?? 20]
+         cycleMin ?? 5, cycleMax ?? 20, config ? JSON.stringify(config) : null]
       );
 
       return NextResponse.json({ strategy: rows[0] });

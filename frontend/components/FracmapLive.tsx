@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { adminFetch } from "@/lib/admin-fetch";
 
-const PHI = 1.6180339887;
 const GOLD = "#D4A843";
 const GOLD_DIM = "rgba(212,168,67,0.08)";
 const FALLBACK_COINS = ["ETHUSDT","BTCUSDT","XRPUSDT","SOLUSDT","BNBUSDT","ADAUSDT","DOGEUSDT","LINKUSDT","AVAXUSDT","DOTUSDT","LTCUSDT","SHIBUSDT","UNIUSDT","TRXUSDT","XLMUSDT","BCHUSDT","HBARUSDT","ZECUSDT","SUIUSDT","TONUSDT"];
@@ -12,7 +12,7 @@ fetch("/api/coins").then(r => r.json()).then(d => { if (d.coins?.length > 0) ALL
 const DEFAULT_EXCLUDED = new Set<string>(); // No default exclusions — users control via coin selector
 
 function getExcludedCoins(): Set<string> {
-  try { const s = sessionStorage.getItem("ntlgnc_excluded_coins"); if (s) return new Set<string>(JSON.parse(s)); } catch {}
+  try { const s = sessionStorage.getItem("fracmap_excluded_coins"); if (s) return new Set<string>(JSON.parse(s)); } catch {}
   return DEFAULT_EXCLUDED;
 }
 function getActiveCoins(): string[] { const ex = getExcludedCoins(); return ALL_COINS.filter(c => !ex.has(c)); }
@@ -20,202 +20,6 @@ const REFRESH_MS = 10000;
 const COINS_PER_TICK = 3;
 const ORDER_COLORS: Record<number,{base:string}> = {1:{base:"rgba(212,168,67,"},2:{base:"rgba(230,140,50,"},3:{base:"rgba(220,100,60,"},4:{base:"rgba(200,80,80,"},5:{base:"rgba(160,80,180,"},6:{base:"rgba(80,120,200,"}};
 const ORDER_HEX: Record<number,string> = {1:"#D4A843",2:"#E68C32",3:"#DC643C",4:"#C85050",5:"#A050B4",6:"#5078C8"};
-
-// ═══════════════════════════════════════════════════════════════════
-// CRITICAL: These functions are EXACT COPIES from FracmapScanner.tsx
-// They must remain identical to ensure backtest and live produce
-// the same signals. DO NOT modify without also updating Scanner.
-// ═══════════════════════════════════════════════════════════════════
-
-// ── SCANNER's signal detection (for diagnostic comparison) ──
-function detectEnsembleSignals(bars: any[], allBands: any[], minStrength = 1, minMaxCycle = 0, spikeFilter = false, holdDivisor = 2, nearMiss = false, priceExtreme = false) {
-  const signals: any[] = [];
-  let position: any = null;
-  const n = bars.length;
-  function isLocalMax(arr: (number | null)[], i: number, w: number): boolean {
-    const val = arr[i]; if (val === null) return false;
-    for (let j = Math.max(0, i - w); j <= Math.min(arr.length - 1, i + w); j++) { if (j === i) continue; if (arr[j] !== null && (arr[j] as number) > val) return false; }
-    return true;
-  }
-  function isLocalMin(arr: (number | null)[], i: number, w: number): boolean {
-    const val = arr[i]; if (val === null) return false;
-    for (let j = Math.max(0, i - w); j <= Math.min(arr.length - 1, i + w); j++) { if (j === i) continue; if (arr[j] !== null && (arr[j] as number) < val) return false; }
-    return true;
-  }
-  function isPriceLow(i: number, w: number): boolean {
-    const lo = bars[i].low;
-    for (let j = Math.max(0, i - w); j < i; j++) { if (bars[j].low < lo) return false; }
-    return true;
-  }
-  function isPriceHigh(i: number, w: number): boolean {
-    const hi = bars[i].high;
-    for (let j = Math.max(0, i - w); j < i; j++) { if (bars[j].high > hi) return false; }
-    return true;
-  }
-  for (let i = 1; i < n; i++) {
-    if (position && i >= position.exitIdx) {
-      const exitPrice = bars[i].open;
-      const ret = position.type === "LONG" ? (exitPrice / position.entryPrice - 1) * 100 : (position.entryPrice / exitPrice - 1) * 100;
-      signals.push({ ...position, exitPrice, exitActualIdx: i, returnPct: +ret.toFixed(3), won: ret > 0 });
-      position = null;
-    }
-    if (position) continue;
-    let buyStrength = 0, sellStrength = 0, maxBuyCycle = 0, maxSellCycle = 0, maxBuyOrder = 0, maxSellOrder = 0;
-    for (const band of allBands) {
-      const lo = band.lower[i], up = band.upper[i];
-      if (lo === null || up === null || up <= lo) continue;
-      // Skip collapsed bands — upper and lower touching means no meaningful channel
-      const bandWidth = (up - lo) / ((up + lo) / 2);
-      if (bandWidth < 0.0001) continue; // less than 0.01% width = collapsed
-      const sw = Math.round(band.cycle / 3);
-      const buyAtI = bars[i].low < lo && bars[i].close > lo;
-      const buyNear = nearMiss && !buyAtI && (i > 0 && band.lower[i-1] !== null && bars[i-1].low < (band.lower[i-1] as number) && bars[i-1].close > (band.lower[i-1] as number));
-      if (buyAtI || buyNear) {
-        if (spikeFilter) { const sH = isLocalMax(band.lower, i, sw); const sN = nearMiss && (isLocalMax(band.lower, i-1, sw) || isLocalMax(band.lower, i+1, sw)); if (!sH && !sN) continue; }
-        buyStrength++; if (band.cycle > maxBuyCycle) maxBuyCycle = band.cycle; if (band.order > maxBuyOrder) maxBuyOrder = band.order;
-      }
-      const sellAtI = bars[i].high > up && bars[i].close < up;
-      const sellNear = nearMiss && !sellAtI && (i > 0 && band.upper[i-1] !== null && bars[i-1].high > (band.upper[i-1] as number) && bars[i-1].close < (band.upper[i-1] as number));
-      if (sellAtI || sellNear) {
-        if (spikeFilter) { const sH = isLocalMin(band.upper, i, sw); const sN = nearMiss && (isLocalMin(band.upper, i-1, sw) || isLocalMin(band.upper, i+1, sw)); if (!sH && !sN) continue; }
-        sellStrength++; if (band.cycle > maxSellCycle) maxSellCycle = band.cycle; if (band.order > maxSellOrder) maxSellOrder = band.order;
-      }
-    }
-    if (buyStrength >= minStrength && maxBuyCycle >= minMaxCycle && buyStrength >= sellStrength) {
-      if (priceExtreme && !isPriceLow(i, Math.round(maxBuyCycle / 2))) { /* skip */ }
-      else if (i + 1 < n) {
-        const hd = Math.round(maxBuyCycle / holdDivisor);
-        position = { type: "LONG", entryIdx: i + 1, entryPrice: bars[i + 1].open, exitIdx: Math.min(i + 1 + hd, n - 1), holdDuration: hd, maxCycle: maxBuyCycle, maxOrder: maxBuyOrder, time: bars[i + 1].time, strength: buyStrength };
-      }
-    } else if (sellStrength >= minStrength && maxSellCycle >= minMaxCycle) {
-      if (priceExtreme && !isPriceHigh(i, Math.round(maxSellCycle / 2))) { /* skip */ }
-      else if (i + 1 < n) {
-        const hd = Math.round(maxSellCycle / holdDivisor);
-        position = { type: "SHORT", entryIdx: i + 1, entryPrice: bars[i + 1].open, exitIdx: Math.min(i + 1 + hd, n - 1), holdDuration: hd, maxCycle: maxSellCycle, maxOrder: maxSellOrder, time: bars[i + 1].time, strength: sellStrength };
-      }
-    }
-  }
-  if (position) {
-    const exitPrice = bars[n - 1].close;
-    const ret = position.type === "LONG" ? (exitPrice / position.entryPrice - 1) * 100 : (position.entryPrice / exitPrice - 1) * 100;
-    signals.push({ ...position, exitPrice, exitActualIdx: n - 1, returnPct: +ret.toFixed(3), won: ret > 0 });
-  }
-  return signals;
-}
-
-// ── LIVE's signal detection (with triggerBands tracking) ──
-
-function computeFracmap(highs: number[], lows: number[], cycle: number, order: number) {
-  const zfracR = Math.round(cycle / 3.0);  // Original: cycle/(1+2*order) with order=1 → cycle/3
-  const phiO = Math.pow(PHI, order);
-  const n = highs.length;
-  const forwardBars = Math.round(cycle / 3);
-  const totalLen = n + forwardBars;
-  const lower: (number | null)[] = new Array(totalLen).fill(null);
-  const upper: (number | null)[] = new Array(totalLen).fill(null);
-  const minIdx = (order + 1) * zfracR;
-  for (let i = minIdx; i < totalLen; i++) {
-    const start = i - (order + 1) * zfracR;
-    const end = i - order * zfracR;
-    if (start < 0 || start >= n) continue;
-    const clampEnd = Math.min(end, n - 1);
-    if (clampEnd < start) continue;
-    let wMax = -Infinity, wMin = Infinity;
-    for (let j = start; j <= clampEnd; j++) { wMax = Math.max(wMax, highs[j], lows[j]); wMin = Math.min(wMin, highs[j], lows[j]); }
-    lower[i] = (1 - phiO) * wMax + phiO * wMin;
-    upper[i] = (1 - phiO) * wMin + phiO * wMax;
-  }
-  return { lower, upper, forwardBars };
-}
-
-function detectSignals(bars: any[], allBands: any[], minStrength: number, minMaxCycle: number, spikeFilter: boolean, holdDivisor: number, nearMiss: boolean, priceExtreme = false) {
-  const signals: any[] = [];
-  let position: any = null;
-  const n = bars.length;
-  function isLocalMax(arr: (number | null)[], i: number, w: number): boolean {
-    const val = arr[i]; if (val === null) return false;
-    for (let j = Math.max(0, i - w); j <= Math.min(arr.length - 1, i + w); j++) { if (j === i) continue; if (arr[j] !== null && (arr[j] as number) > val) return false; }
-    return true;
-  }
-  function isLocalMin(arr: (number | null)[], i: number, w: number): boolean {
-    const val = arr[i]; if (val === null) return false;
-    for (let j = Math.max(0, i - w); j <= Math.min(arr.length - 1, i + w); j++) { if (j === i) continue; if (arr[j] !== null && (arr[j] as number) < val) return false; }
-    return true;
-  }
-  function isPriceLow(i: number, w: number): boolean {
-    const lo = bars[i].low;
-    for (let j = Math.max(0, i - w); j < i; j++) { if (bars[j].low < lo) return false; }
-    return true;
-  }
-  function isPriceHigh(i: number, w: number): boolean {
-    const hi = bars[i].high;
-    for (let j = Math.max(0, i - w); j < i; j++) { if (bars[j].high > hi) return false; }
-    return true;
-  }
-  for (let i = 1; i < n; i++) {
-    if (position && i >= position.exitIdx) {
-      const exitPrice = bars[i].open;
-      const ret = position.type === "LONG" ? (exitPrice / position.entryPrice - 1) * 100 : (position.entryPrice / exitPrice - 1) * 100;
-      signals.push({ ...position, exitPrice, exitActualIdx: i, returnPct: +ret.toFixed(3), won: ret > 0 });
-      position = null;
-    }
-    if (position) continue;
-    let buyStrength = 0, sellStrength = 0, maxBuyCycle = 0, maxSellCycle = 0, maxBuyOrder = 0, maxSellOrder = 0;
-    const buyBands: {cycle:number;order:number}[] = [], sellBands: {cycle:number;order:number}[] = [];
-    for (const band of allBands) {
-      const lo = band.lower[i], up = band.upper[i];
-      if (lo === null || up === null || up <= lo) continue;
-      // Skip collapsed bands — upper and lower touching means no meaningful channel
-      const bandWidth = (up - lo) / ((up + lo) / 2);
-      if (bandWidth < 0.0001) continue; // less than 0.01% width = collapsed
-      const sw = Math.round(band.cycle / 3);
-      const buyAtI = bars[i].low < lo && bars[i].close > lo;
-      const buyNear = nearMiss && !buyAtI && (i > 0 && band.lower[i-1] !== null && bars[i-1].low < (band.lower[i-1] as number) && bars[i-1].close > (band.lower[i-1] as number));
-      if (buyAtI || buyNear) {
-        if (spikeFilter) { const sH = isLocalMax(band.lower, i, sw); const sN = nearMiss && (isLocalMax(band.lower, i-1, sw) || isLocalMax(band.lower, i+1, sw)); if (!sH && !sN) continue; }
-        buyStrength++;
-        buyBands.push({cycle:band.cycle,order:band.order}); if (band.cycle > maxBuyCycle) maxBuyCycle = band.cycle; if (band.order > maxBuyOrder) maxBuyOrder = band.order;
-      }
-      const sellAtI = bars[i].high > up && bars[i].close < up;
-      const sellNear = nearMiss && !sellAtI && (i > 0 && band.upper[i-1] !== null && bars[i-1].high > (band.upper[i-1] as number) && bars[i-1].close < (band.upper[i-1] as number));
-      if (sellAtI || sellNear) {
-        if (spikeFilter) { const sH = isLocalMin(band.upper, i, sw); const sN = nearMiss && (isLocalMin(band.upper, i-1, sw) || isLocalMin(band.upper, i+1, sw)); if (!sH && !sN) continue; }
-        sellStrength++;
-        sellBands.push({cycle:band.cycle,order:band.order}); if (band.cycle > maxSellCycle) maxSellCycle = band.cycle; if (band.order > maxSellOrder) maxSellOrder = band.order;
-      }
-    }
-    if (buyStrength >= minStrength && maxBuyCycle >= minMaxCycle && buyStrength >= sellStrength) {
-      const _peW = Math.round(maxBuyCycle / 2);
-      const _pePass = isPriceLow(i, _peW);
-      if (priceExtreme && !_pePass) {
-        // Log why it was skipped
-        const _lo = bars[i].low; let _minLo = _lo, _minJ = i;
-        for (let j = Math.max(0, i - _peW); j < i; j++) { if (bars[j].low < _minLo) { _minLo = bars[j].low; _minJ = j; } }
-        console.log(`[PE-SKIP] BUY i=${i} time=${bars[i].time} low=${_lo} minLow=${_minLo} at ${i-_minJ} bars ago, lookback=${_peW}`);
-      }
-      else if (i + 1 < n) {
-        // Enter at NEXT bar's open — first executable price after signal
-        const _lo = bars[i].low; let _minLo = _lo, _minJ = i;
-        for (let j = Math.max(0, i - _peW); j < i; j++) { if (bars[j].low < _minLo) { _minLo = bars[j].low; _minJ = j; } }
-        console.log(`[PE-PASS] BUY signal_bar=${i} time=${bars[i].time} entry_bar=${i+1} entry_time=${bars[i+1].time} entry=${bars[i+1].open} low=${_lo} minLow=${_minLo} lookback=${_peW} str=${buyStrength}`);
-        const hd = Math.round(maxBuyCycle / holdDivisor);
-        position = { type: "LONG", entryIdx: i + 1, entryPrice: bars[i + 1].open, exitIdx: Math.min(i + 1 + hd, n - 1), holdDuration: hd, maxCycle: maxBuyCycle, maxOrder: maxBuyOrder, time: bars[i + 1].time, strength: buyStrength, triggerBands: buyBands };
-      }
-    } else if (sellStrength >= minStrength && maxSellCycle >= minMaxCycle) {
-      if (priceExtreme && !isPriceHigh(i, Math.round(maxSellCycle / 2))) { /* skip */ }
-      else if (i + 1 < n) {
-        const hd = Math.round(maxSellCycle / holdDivisor);
-        position = { type: "SHORT", entryIdx: i + 1, entryPrice: bars[i + 1].open, exitIdx: Math.min(i + 1 + hd, n - 1), holdDuration: hd, maxCycle: maxSellCycle, maxOrder: maxSellOrder, time: bars[i + 1].time, strength: sellStrength, triggerBands: sellBands };
-      }
-    }
-  }
-  if (position) {
-    const exitPrice = bars[n - 1].close;
-    const ret = position.type === "LONG" ? (exitPrice / position.entryPrice - 1) * 100 : (position.entryPrice / exitPrice - 1) * 100;
-    signals.push({ ...position, exitPrice, exitActualIdx: n - 1, returnPct: +ret.toFixed(3), won: ret > 0 });
-  }
-  return signals;
-}
 
 type Strategy={id:string;name:string;type:string;barMinutes:number;symbol:string|null;minStr:number;minCyc:number;spike:boolean;nearMiss:boolean;holdDiv:number;priceExt?:boolean;isSharpe:number|null;oosSharpe:number|null;bootP:number|null;winRate:number|null;active:boolean;cycleMin?:number;cycleMax?:number};
 type TradeRecord={id:string;dbId?:string;coin:string;type:"LONG"|"SHORT";entryPrice:number;entryTime:string;strength:number;holdBars:number;barMinutes:number;status:"open"|"closed";currentPrice?:number;unrealizedPct?:number;exitPrice?:number;returnPct?:number;closedTime?:string;triggerBands?:{cycle:number;order:number}[];exitTimeEstimate?:string;maxCycle?:number;maxOrder?:number};
@@ -298,13 +102,13 @@ export default function FracmapLive(){
 
   // Persist trades to sessionStorage
   const persistTrades = useCallback((t: TradeRecord[]) => {
-    try { sessionStorage.setItem("ntlgnc_live_trades", JSON.stringify(t.slice(-200))); } catch {}
+    try { sessionStorage.setItem("fracmap_live_trades", JSON.stringify(t.slice(-200))); } catch {}
   }, []);
 
   // Restore trades from sessionStorage on mount
   useEffect(() => {
     try {
-      const s = sessionStorage.getItem("ntlgnc_live_trades");
+      const s = sessionStorage.getItem("fracmap_live_trades");
       if (s) {
         const raw: TradeRecord[] = JSON.parse(s);
         // Deduplicate: only keep one open trade per coin
@@ -361,13 +165,13 @@ export default function FracmapLive(){
     return()=>ro.disconnect();
   },[coinStates,selectedCoin,yAxisMode,shadingMode,chartView]);
 
-  useEffect(()=>{fetch("/api/fracmap-strategy?action=list").then(r=>r.json()).then(d=>{if(d.strategies){setStrategies(d.strategies);const u=d.strategies.filter((s:Strategy)=>s.type==="universal"&&s.active),p=d.strategies.filter((s:Strategy)=>s.type==="per_coin"&&s.active);if(u.length>0)setActiveStrategy(u[0]);if(p.length>0)setPerCoinStrategies(p);}setLoading(false);}).catch(e=>{setError(e.message);setLoading(false);});},[]);
+  useEffect(()=>{adminFetch("/api/fracmap-strategy?action=list").then(r=>r.json()).then(d=>{if(d.strategies){setStrategies(d.strategies);const u=d.strategies.filter((s:Strategy)=>s.type==="universal"&&s.active),p=d.strategies.filter((s:Strategy)=>(s.type==="per_coin"||s.type==="coin_specific")&&s.active);if(u.length>0)setActiveStrategy(u[0]);if(p.length>0)setPerCoinStrategies(p);}setLoading(false);}).catch(e=>{setError(e.message);setLoading(false);});},[]);
 
   // Load historical trades from DB on mount AND when strategy changes (last 24h)
   const loadHistorical=useCallback(()=>{
     const stratId=activeStrategy?.id;
     const stratFilter=stratId?`&strategyId=${stratId}`:"";
-    fetch(`/api/fracmap-strategy?action=signals&status=closed&limit=500${stratFilter}`).then(r=>r.json()).then(d=>{
+    adminFetch(`/api/fracmap-strategy?action=signals&status=closed&limit=500${stratFilter}`).then(r=>r.json()).then(d=>{
       if(!d.signals)return;
       const cutoff=Date.now()-24*3600000;
       const historical:TradeRecord[]=d.signals
@@ -391,7 +195,7 @@ export default function FracmapLive(){
       if(eqPts.length>0)setEquityHistory(eqPts);
     }).catch(()=>{});
     // Also load open signals — only recent ones (stale opens are dead)
-    fetch(`/api/fracmap-strategy?action=signals&status=open&limit=100${stratFilter}`).then(r=>r.json()).then(d=>{
+    adminFetch(`/api/fracmap-strategy?action=signals&status=open&limit=100${stratFilter}`).then(r=>r.json()).then(d=>{
       if(!d.signals||!d.signals.length)return;
       const recentCutoff=Date.now()-2*3600000; // only opens from last 2 hours
       const openSigs:TradeRecord[]=d.signals
@@ -424,47 +228,39 @@ export default function FracmapLive(){
     return activeStratRef.current;
   },[]);
 
-  const refreshCoin=useCallback(async(sym:string,st:Strategy):Promise<CoinState|null>=>{
+  const refreshCoin=useCallback(async(sym:string,st:Strategy):Promise<{state:CoinState;signals:any[]}|null>=>{
     try{
-    // ═══ Dynamic bar limit — calculated from strategy parameters ═══
-    // Band warm-up: (maxOrder+1) * round(maxCycle/3) = worst-case 7*34 = 238 bars
-    // Position-lock convergence: ~30 signals × maxHold bars
-    // Safety margin: 1.2x
     const cMax = st.cycleMax ?? 100;
-    const holdDiv = Number(st.holdDiv) || 2;
-    const bandWarmup = 7 * Math.round(cMax / 3);           // 238 for cycle=100
-    const maxHold = Math.round(cMax / holdDiv);             // 50 for cycle=100, div=2
-    const chainConvergence = 30 * maxHold;                  // 1500 for above
-    const fetchLimit = Math.max(500, Math.round((bandWarmup + chainConvergence) * 1.2)); // ≈ 2085
-    const res=await fetch(`/api/fracmap?action=chart&symbol=${sym}&barMinutes=${st.barMinutes}&cycle=75&order=1&limit=${fetchLimit}`);const data=await res.json();if(!data.bars||data.bars.length<50)return null;
+    const cMin = st.cycleMin ?? 10;
 
-    // ═══ Cache check: skip expensive band computation if no new bars ═══
+    // Server-side computation — bands + signals computed on server
+    const res=await adminFetch("/api/fracmap/compute",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        action:"liveDetect",symbol:sym,barMinutes:st.barMinutes,
+        cycleMin:cMin,cycleMax:cMax,
+        minStr:Number(st.minStr)||1,minCyc:Number(st.minCyc)||0,
+        spike:!!st.spike,nearMiss:!!st.nearMiss,holdDiv:Number(st.holdDiv)||2,priceExt:true,
+      }),
+    });
+    const data=await res.json();
+    if(!data.bars||data.bars.length<50)return null;
+
+    // Cache check: skip if same last bar
     const lastBarTime = data.bars[data.bars.length - 1]?.time;
     const cached = barCacheRef.current[sym];
     if (cached && cached.lastBarTime === lastBarTime) {
-      // Update price from latest bar but skip recomputation
       const lastBar = data.bars[data.bars.length - 1];
       const prevBar = data.bars.length > 1 ? data.bars[data.bars.length - 2] : lastBar;
-      return { ...cached.state, lastPrice: lastBar.close, change1m: ((lastBar.close - prevBar.close) / prevBar.close) * 100 };
+      return { state: { ...cached.state, lastPrice: lastBar.close, change1m: ((lastBar.close - prevBar.close) / prevBar.close) * 100 }, signals: data.signals || [] };
     }
 
     const bars=data.bars.map((b:any)=>({time:b.time,open:b.open,high:b.high,low:b.low,close:b.close,volume:b.volume||0}));
-    const highs=bars.map((b:any)=>b.high),lows=bars.map((b:any)=>b.low),bands:any[]=[];
-    // ═══ FIX: Use nullish coalescing (??) — must match scanner's cycle range ═══
-    const cMin = st.cycleMin ?? 10;
-    if (cMin < 2 || cMax < cMin || cMax > 200) {
-      console.warn(`[FracmapLive] Invalid cycle range for ${sym}: ${cMin}-${cMax}, using 10-100`);
-    }
-    for(const o of[1,2,3,4,5,6]){
-      for(let c=cMin;c<=cMax;c++){
-        bands.push({cycle:c,order:o,...computeFracmap(highs,lows,c,o)});
-      }
-    }
+    const bands=data.bands||[];
     const last=bars[bars.length-1],prev=bars.length>1?bars[bars.length-2]:last;
     const state: CoinState = {symbol:sym,lastPrice:last.close,change1m:((last.close-prev.close)/prev.close)*100,bars,bands};
-    // Cache for next tick
-    barCacheRef.current[sym] = { lastBarTime: lastBarTime, state };
-    return state;}catch{return null;}
+    barCacheRef.current[sym] = { lastBarTime, state };
+    return {state,signals:data.signals||[]};}catch{return null;}
   },[]);
 
   const coinIdxRef = useRef(0);
@@ -494,12 +290,12 @@ export default function FracmapLive(){
     if (st.cycleMin == null || st.cycleMax == null) {
       console.warn(`[FracmapLive] ⚠️ Strategy "${st.name}" has null cycleMin/cycleMax — using defaults. Re-save from scanner to fix.`);
     }
-    const state=await refreshCoin(sym,st);
-    if(!state){ refreshLockRef.current=false; return; }
+    const result=await refreshCoin(sym,st);
+    if(!result){ refreshLockRef.current=false; return; }
+    const {state,signals:sigs}=result;
 
     setCoinStates(prev => ({...prev, [sym]: state}));
 
-    const sigs=detectSignals(state.bars,state.bands,stMinStr,stMinCyc,stSpike,stHoldDiv,stNearMiss,true);
     console.log(`[LIVE] ${sym} bars=${state.bars.length} bands=${state.bands.length} sigs=${sigs.length} str=${stMinStr} cyc=${stMinCyc} spike=${stSpike} cRange=${st.cycleMin ?? '??'}-${st.cycleMax ?? '??'}`);
 
     const currentTrades = [...tradesRef.current];
@@ -521,7 +317,7 @@ export default function FracmapLive(){
             returnPct: retPct, closedTime: new Date().toISOString(),
           };
           if (currentTrades[idx].dbId) {
-            fetch("/api/fracmap-strategy", {
+            adminFetch("/api/fracmap-strategy", {
               method: "POST", headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 action: "closeSignal", id: currentTrades[idx].dbId,
@@ -567,7 +363,7 @@ export default function FracmapLive(){
 
           const stratId = st.id;
           if (stratId) {
-            fetch("/api/fracmap-strategy", {
+            adminFetch("/api/fracmap-strategy", {
               method: "POST", headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 action: "recordSignal", strategyId: stratId, symbol: sym,
@@ -757,41 +553,31 @@ export default function FracmapLive(){
   const eX=(i:number)=>EP.left+(i/Math.max(eqCum.length-1,1))*ePW;
   const eY=(v:number)=>EP.top+ePH-((v-eMin)/eR)*ePH;
 
-  /* ═══ DIAGNOSTIC: Run scanner logic vs live logic on identical data ═══ */
+  /* ═══ DIAGNOSTIC: Compare full-data vs live-data signal detection ═══ */
   const runDiagnostic = useCallback(async (coin: string) => {
     if (!activeStrategy) return;
     setDiagRunning(true); setDiagResults(null);
     const st = activeStrategy;
     const cMin = st.cycleMin ?? 10, cMax = st.cycleMax ?? 100;
+    const params = { barMinutes:st.barMinutes, cycleMin:cMin, cycleMax:cMax, minStr:Number(st.minStr)||1, minCyc:Number(st.minCyc)||0, spike:!!st.spike, holdDiv:Number(st.holdDiv)||2, nearMiss:!!st.nearMiss, priceExt:true };
     try {
-      // 1. Fetch FULL data (same as scanner would)
-      const resFull = await fetch(`/api/fracmap?action=chart&symbol=${coin}&barMinutes=${st.barMinutes}&cycle=75&order=1&limit=50000`);
+      // 1. Full-data signals (scanner-equivalent) via computeOOS with all bars
+      const resFull = await adminFetch("/api/fracmap/compute", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ action:"computeOOS", symbol:coin, ...params, splitPct:0 }),
+      });
       const dataFull = await resFull.json();
-      const fullBars = dataFull.bars?.map((b: any) => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume || 0 })) || [];
+      const scannerSigs = dataFull.oosSignals || [];
+      const fullBarCount = dataFull.oosBars?.length || 0;
 
-      // 2. Fetch LIVE-sized data (same as live engine)
-      const resLive = await fetch(`/api/fracmap?action=chart&symbol=${coin}&barMinutes=${st.barMinutes}&cycle=75&order=1&limit=3000`);
+      // 2. Live-data signals (live-equivalent) via liveDetect
+      const resLive = await adminFetch("/api/fracmap/compute", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ action:"liveDetect", symbol:coin, ...params }),
+      });
       const dataLive = await resLive.json();
-      const liveBars = dataLive.bars?.map((b: any) => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume || 0 })) || [];
-
-      // 3. Compute bands on FULL data
-      const fullHighs = fullBars.map((b: any) => b.high), fullLows = fullBars.map((b: any) => b.low);
-      const fullBands: any[] = [];
-      for (const o of [1,2,3,4,5,6]) for (let c = cMin; c <= cMax; c++) fullBands.push({ cycle: c, order: o, ...computeFracmap(fullHighs, fullLows, c, o) });
-
-      // 4. Compute bands on LIVE data
-      const liveHighs = liveBars.map((b: any) => b.high), liveLows = liveBars.map((b: any) => b.low);
-      const liveBandsArr: any[] = [];
-      for (const o of [1,2,3,4,5,6]) for (let c = cMin; c <= cMax; c++) liveBandsArr.push({ cycle: c, order: o, ...computeFracmap(liveHighs, liveLows, c, o) });
-
-      // 5. Run SCANNER's detectEnsembleSignals on full data
-      const scannerSigs = detectEnsembleSignals(fullBars, fullBands, Number(st.minStr)||1, Number(st.minCyc)||0, !!st.spike, Number(st.holdDiv)||2, !!st.nearMiss, true);
-
-      // 6. Run LIVE's detectSignals on live data
-      const liveSigs = detectSignals(liveBars, liveBandsArr, Number(st.minStr)||1, Number(st.minCyc)||0, !!st.spike, Number(st.holdDiv)||2, !!st.nearMiss, true);
-
-      // 7. Also run SCANNER's detectEnsembleSignals on live-sized data for isolation
-      const scannerOnLiveSigs = detectEnsembleSignals(liveBars, liveBandsArr, Number(st.minStr)||1, Number(st.minCyc)||0, !!st.spike, Number(st.holdDiv)||2, !!st.nearMiss, true);
+      const liveSigs = dataLive.signals || [];
+      const liveBarCount = dataLive.bars?.length || 0;
 
       // Compare last 20 signals
       const sLast = scannerSigs.slice(-20).map((s: any) => ({ type: s.type, idx: s.entryIdx, price: s.entryPrice, time: s.time, str: s.strength, maxC: s.maxCycle, hold: s.holdDuration, ret: s.returnPct }));
@@ -803,20 +589,13 @@ export default function FracmapLive(){
       for (let i = 1; i <= tailLen; i++) {
         const sS = scannerSigs[scannerSigs.length - i];
         const lS = liveSigs[liveSigs.length - i];
-        // Compare by time (since indices differ due to different bar counts)
-        if (sS.time !== lS.time || sS.type !== lS.type) {
-          divergeIdx = i;
-          break;
-        }
+        if (sS.time !== lS.time || sS.type !== lS.type) { divergeIdx = i; break; }
       }
 
-      console.log(`[DIAG] ${coin}: fullBars=${fullBars.length} liveBars=${liveBars.length} scannerSigs=${scannerSigs.length} liveSigs=${liveSigs.length} scannerOnLive=${scannerOnLiveSigs.length}`);
-      console.log(`[DIAG] Scanner last sig:`, scannerSigs[scannerSigs.length-1]);
-      console.log(`[DIAG] Live last sig:`, liveSigs[liveSigs.length-1]);
-      console.log(`[DIAG] Scanner-on-live-data last sig:`, scannerOnLiveSigs[scannerOnLiveSigs.length-1]);
+      console.log(`[DIAG] ${coin}: fullBars=${fullBarCount} liveBars=${liveBarCount} scannerSigs=${scannerSigs.length} liveSigs=${liveSigs.length}`);
 
       setDiagResults({
-        coin, barsFull: fullBars.length, barsLive: liveBars.length, bandCount: fullBands.length,
+        coin, barsFull: fullBarCount, barsLive: liveBarCount, bandCount: (cMax-cMin+1)*6,
         scannerSigs, liveSigs,
         scannerLast20: sLast, liveLast20: lLast,
         match: divergeIdx === null, divergeIdx,
@@ -878,8 +657,15 @@ export default function FracmapLive(){
       {/* ACTIVE STRATEGIES PANEL */}
       {(() => {
         const activeStrats = strategies.filter(s => s.active);
-        const tfLabels: Record<number, string> = { 1: "1M", 60: "1H", 1440: "1D" };
+        const liveUniversal = activeStrats.filter(s => s.type === "universal");
+        const liveCoin = activeStrats.filter(s => s.type === "per_coin" || s.type === "coin_specific");
+        const tfLabels: Record<number, string> = { 1: "1M", 15: "15M", 60: "1H", 1440: "1D" };
         const tfOrder = [1, 60, 1440];
+        // Add any extra timeframes that have strategies (e.g. 15m)
+        for (const s of strategies) {
+          if (!tfOrder.includes(s.barMinutes)) tfOrder.push(s.barMinutes);
+        }
+        tfOrder.sort((a, b) => a - b);
         const grouped = new Map<number, Strategy[]>();
         for (const bm of tfOrder) grouped.set(bm, []);
         for (const s of strategies) {
@@ -893,7 +679,7 @@ export default function FracmapLive(){
           const others = (grouped.get(bm) || []).filter(s => s.active && s.id !== id);
           for (const s of others) {
             try {
-              await fetch("/api/fracmap-strategy", {
+              await adminFetch("/api/fracmap-strategy", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ action: "toggleStrategy", id: s.id, active: false }),
@@ -902,7 +688,7 @@ export default function FracmapLive(){
           }
           // Now activate the chosen one
           try {
-            const res = await fetch("/api/fracmap-strategy", {
+            const res = await adminFetch("/api/fracmap-strategy", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ action: "toggleStrategy", id, active: true }),
@@ -922,7 +708,7 @@ export default function FracmapLive(){
         const handleDeactivate = async (id: string) => {
           setTogglingIds(prev => new Set(prev).add(id));
           try {
-            const res = await fetch("/api/fracmap-strategy", {
+            const res = await adminFetch("/api/fracmap-strategy", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ action: "toggleStrategy", id, active: false }),
@@ -941,7 +727,7 @@ export default function FracmapLive(){
           const targets = (grouped.get(bm) || []).filter(s => s.active);
           for (const s of targets) {
             try {
-              await fetch("/api/fracmap-strategy", {
+              await adminFetch("/api/fracmap-strategy", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ action: "toggleStrategy", id: s.id, active: false }),
@@ -957,7 +743,7 @@ export default function FracmapLive(){
             <div className="flex items-center gap-3 mb-2">
               <span className="text-[11px] font-mono font-bold tracking-wide" style={{ color: GOLD }}>Live Strategies</span>
               <span className="text-[9px] font-mono text-[var(--text-dim)]">
-                {activeStrats.length} active across {new Set(activeStrats.map(s => s.barMinutes)).size} timeframe{new Set(activeStrats.map(s => s.barMinutes)).size !== 1 ? "s" : ""}
+                {liveUniversal.length} universal live{liveCoin.length > 0 ? ` + ${liveCoin.length} coin-specific` : ""} · {strategies.length} available across {new Set(strategies.map(s => s.barMinutes)).size} timeframe{new Set(strategies.map(s => s.barMinutes)).size !== 1 ? "s" : ""}
               </span>
               {togglingAll && <span className="text-[9px] font-mono animate-pulse" style={{ color: GOLD }}>⏳ Processing…</span>}
             </div>
@@ -969,7 +755,7 @@ export default function FracmapLive(){
                 const label = tfLabels[bm] || `${bm}m`;
                 const hasActive = active.length > 0;
                 const universalActive = active.filter(s => s.type === "universal");
-                const perCoinActive = active.filter(s => s.type === "per_coin");
+                const perCoinActive = active.filter(s => s.type === "per_coin" || s.type === "coin_specific");
                 // For the picker: get unique universal strategies (inactive)
                 const universalInactive = inactive.filter(s => s.type === "universal");
                 const isBusy = togglingAll === `${bm}-on` || togglingAll === `${bm}-off`;
@@ -1023,9 +809,9 @@ export default function FracmapLive(){
                         })()}
 
                         {/* Per-coin count if any active */}
-                        {active.filter(s => s.type === "per_coin").length > 0 && (
+                        {active.filter(s => s.type === "per_coin" || s.type === "coin_specific").length > 0 && (
                           <div className="text-[8px] font-mono text-[var(--text-dim)] mt-0.5">
-                            +{active.filter(s => s.type === "per_coin").length} per-coin active
+                            +{active.filter(s => s.type === "per_coin" || s.type === "coin_specific").length} coin-specific active
                           </div>
                         )}
 
@@ -1128,7 +914,7 @@ export default function FracmapLive(){
               <div className="grid grid-cols-2 gap-3">
                 {/* Scanner signals */}
                 <div>
-                  <div className="text-[9px] font-mono font-bold mb-1" style={{color:"#a78bfa"}}>Scanner (detectEnsembleSignals · {diagResults.barsFull} bars)</div>
+                  <div className="text-[9px] font-mono font-bold mb-1" style={{color:"#a78bfa"}}>Scanner (full data · {diagResults.barsFull} bars)</div>
                   <div className="overflow-y-auto max-h-[300px] rounded border border-[var(--border)]">
                     <table className="w-full text-[10px]">
                       <thead><tr className="text-white/30 border-b border-white/5">
@@ -1165,7 +951,7 @@ export default function FracmapLive(){
 
                 {/* Live signals */}
                 <div>
-                  <div className="text-[9px] font-mono font-bold mb-1" style={{color:GOLD}}>Live (detectSignals · {diagResults.barsLive} bars)</div>
+                  <div className="text-[9px] font-mono font-bold mb-1" style={{color:GOLD}}>Live (live data · {diagResults.barsLive} bars)</div>
                   <div className="overflow-y-auto max-h-[300px] rounded border border-[var(--border)]">
                     <table className="w-full text-[10px]">
                       <thead><tr className="text-white/30 border-b border-white/5">
@@ -1219,7 +1005,7 @@ export default function FracmapLive(){
             <div className="text-xs font-mono font-semibold" style={{color:GOLD}}>Trade Log</div>
             <div className="flex items-center gap-2">
               {trades.length > 0 && (
-                <button onClick={()=>{tradesRef.current=[];knownKeysRef.current.clear();setTrades([]);setEquityHistory([]);try{sessionStorage.removeItem("ntlgnc_live_trades");}catch{}}} title="Clear all trades" className="text-[9px] font-mono px-1.5 py-0.5 rounded border border-[var(--border)] hover:border-[#ef4444] transition-all" style={{color:"var(--text-dim)"}}>🗑</button>
+                <button onClick={()=>{tradesRef.current=[];knownKeysRef.current.clear();setTrades([]);setEquityHistory([]);try{sessionStorage.removeItem("fracmap_live_trades");}catch{}}} title="Clear all trades" className="text-[9px] font-mono px-1.5 py-0.5 rounded border border-[var(--border)] hover:border-[#ef4444] transition-all" style={{color:"var(--text-dim)"}}>🗑</button>
               )}
               {openT.length > 0 && (
                 <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{background:"rgba(34,197,94,0.1)", color:"#22c55e"}}>

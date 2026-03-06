@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Pool } from "pg";
+import { validateAdminRequest, unauthorizedResponse } from "@/lib/admin-auth";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -54,6 +55,7 @@ async function ensureTables(client: any) {
 }
 
 export async function GET(req: NextRequest) {
+  if (!validateAdminRequest(req)) return unauthorizedResponse();
   const client = await pool.connect();
   try {
     await ensureTables(client);
@@ -145,6 +147,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  if (!validateAdminRequest(req)) return unauthorizedResponse();
   const body = await req.json();
   if (body.action !== "save") {
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });

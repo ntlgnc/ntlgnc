@@ -111,7 +111,7 @@ export function useAuth() {
   return ctx;
 }
 
-const STORAGE_KEY = "ntlgnc_user";
+const STORAGE_KEY = "fracmap_user";
 
 function loadState(): UserState {
   if (typeof window === "undefined") return DEFAULT_STATE;

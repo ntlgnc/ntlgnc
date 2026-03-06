@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import AdminNav from "@/components/AdminNav";
+import { adminFetch } from "@/lib/admin-fetch";
 
 const GOLD = "#D4A843";
 const BG = "#080a10";
@@ -239,7 +240,7 @@ export default function FilterMatrixPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/admin/filter-matrix?action=load");
+      const res = await adminFetch("/api/admin/filter-matrix?action=load");
       const d = await res.json();
       if (d.strategies) setStrategies(d.strategies);
       if (d.matrix) setMatrix(d.matrix);
@@ -256,7 +257,7 @@ export default function FilterMatrixPage() {
   const save = useCallback(async () => {
     setSaving(true);
     try {
-      const res = await fetch("/api/admin/filter-matrix", {
+      const res = await adminFetch("/api/admin/filter-matrix", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "save", matrix }),
@@ -399,7 +400,7 @@ export default function FilterMatrixPage() {
       <nav className="fixed top-0 w-full z-50 border-b border-white/[0.06]" style={{ background: "rgba(8,10,16,0.95)", backdropFilter: "blur(12px)" }}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
           <Link href="/" className="text-[15px] font-mono font-black tracking-tight" style={{ color: GOLD }}>
-            NTLGNC <span className="text-white/40 font-normal text-[11px]">SIGNAL LAB</span>
+            FRACMAP <span className="text-white/40 font-normal text-[11px]">SIGNAL LAB</span>
           </Link>
           <div className="flex gap-4 sm:gap-6 text-[11px] font-mono">
             <Link href="/" className="text-white/40 hover:text-white/70 transition hidden sm:block">Home</Link>

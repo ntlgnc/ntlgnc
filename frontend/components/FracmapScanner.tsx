@@ -3,109 +3,10 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import RegimeAnalysis from "./RegimeAnalysis";
 import HedgedStrategy from "./HedgedStrategy";
+import { adminFetch } from "@/lib/admin-fetch";
 
-const PHI = 1.6180339887;
 const GOLD = "#D4A843";
 const GOLD_DIM = "rgba(212,168,67,0.08)";
-
-function computeFracmap(highs: number[], lows: number[], cycle: number, order: number) {
-  const zfracR = Math.round(cycle / 3.0);  // Original: cycle/(1+2*order) with order=1 → cycle/3
-  const phiO = Math.pow(PHI, order);
-  const n = highs.length;
-  const forwardBars = Math.round(cycle / 3);
-  const totalLen = n + forwardBars;
-  const lower: (number | null)[] = new Array(totalLen).fill(null);
-  const upper: (number | null)[] = new Array(totalLen).fill(null);
-  const minIdx = (order + 1) * zfracR;
-  for (let i = minIdx; i < totalLen; i++) {
-    const start = i - (order + 1) * zfracR;
-    const end = i - order * zfracR;
-    if (start < 0 || start >= n) continue;
-    const clampEnd = Math.min(end, n - 1);
-    if (clampEnd < start) continue;
-    let wMax = -Infinity, wMin = Infinity;
-    for (let j = start; j <= clampEnd; j++) { wMax = Math.max(wMax, highs[j], lows[j]); wMin = Math.min(wMin, highs[j], lows[j]); }
-    lower[i] = (1 - phiO) * wMax + phiO * wMin;
-    upper[i] = (1 - phiO) * wMin + phiO * wMax;
-  }
-  return { lower, upper, forwardBars };
-}
-
-function detectEnsembleSignals(bars: any[], allBands: any[], minStrength = 1, minMaxCycle = 0, spikeFilter = false, holdDivisor = 2, nearMiss = false, priceExtreme = false) {
-  const signals: any[] = [];
-  let position: any = null;
-  const n = bars.length;
-  function isLocalMax(arr: (number | null)[], i: number, w: number): boolean {
-    const val = arr[i]; if (val === null) return false;
-    for (let j = Math.max(0, i - w); j <= Math.min(arr.length - 1, i + w); j++) { if (j === i) continue; if (arr[j] !== null && (arr[j] as number) > val) return false; }
-    return true;
-  }
-  function isLocalMin(arr: (number | null)[], i: number, w: number): boolean {
-    const val = arr[i]; if (val === null) return false;
-    for (let j = Math.max(0, i - w); j <= Math.min(arr.length - 1, i + w); j++) { if (j === i) continue; if (arr[j] !== null && (arr[j] as number) < val) return false; }
-    return true;
-  }
-  // Price extreme check: is this bar's low the lowest in last `w` bars?
-  function isPriceLow(i: number, w: number): boolean {
-    const lo = bars[i].low;
-    for (let j = Math.max(0, i - w); j < i; j++) { if (bars[j].low < lo) return false; }
-    return true;
-  }
-  function isPriceHigh(i: number, w: number): boolean {
-    const hi = bars[i].high;
-    for (let j = Math.max(0, i - w); j < i; j++) { if (bars[j].high > hi) return false; }
-    return true;
-  }
-  for (let i = 1; i < n; i++) {
-    if (position && i >= position.exitIdx) {
-      const exitPrice = bars[i].open;
-      const ret = position.type === "LONG" ? (exitPrice / position.entryPrice - 1) * 100 : (position.entryPrice / exitPrice - 1) * 100;
-      signals.push({ ...position, exitPrice, exitActualIdx: i, returnPct: +ret.toFixed(3), won: ret > 0 });
-      position = null;
-    }
-    if (position) continue;
-    let buyStrength = 0, sellStrength = 0, maxBuyCycle = 0, maxSellCycle = 0, maxBuyOrder = 0, maxSellOrder = 0;
-    for (const band of allBands) {
-      const lo = band.lower[i], up = band.upper[i];
-      if (lo === null || up === null || up <= lo) continue;
-      // Skip collapsed bands — upper and lower touching means no meaningful channel
-      const bandWidth = (up - lo) / ((up + lo) / 2);
-      if (bandWidth < 0.0001) continue; // less than 0.01% width = collapsed
-      const sw = Math.round(band.cycle / 3);
-      const buyAtI = bars[i].low < lo && bars[i].close > lo;
-      const buyNear = nearMiss && !buyAtI && (i > 0 && band.lower[i-1] !== null && bars[i-1].low < (band.lower[i-1] as number) && bars[i-1].close > (band.lower[i-1] as number));
-      if (buyAtI || buyNear) {
-        if (spikeFilter) { const sH = isLocalMax(band.lower, i, sw); const sN = nearMiss && (isLocalMax(band.lower, i-1, sw) || isLocalMax(band.lower, i+1, sw)); if (!sH && !sN) continue; }
-        buyStrength++; if (band.cycle > maxBuyCycle) maxBuyCycle = band.cycle; if (band.order > maxBuyOrder) maxBuyOrder = band.order;
-      }
-      const sellAtI = bars[i].high > up && bars[i].close < up;
-      const sellNear = nearMiss && !sellAtI && (i > 0 && band.upper[i-1] !== null && bars[i-1].high > (band.upper[i-1] as number) && bars[i-1].close < (band.upper[i-1] as number));
-      if (sellAtI || sellNear) {
-        if (spikeFilter) { const sH = isLocalMin(band.upper, i, sw); const sN = nearMiss && (isLocalMin(band.upper, i-1, sw) || isLocalMin(band.upper, i+1, sw)); if (!sH && !sN) continue; }
-        sellStrength++; if (band.cycle > maxSellCycle) maxSellCycle = band.cycle; if (band.order > maxSellOrder) maxSellOrder = band.order;
-      }
-    }
-    if (buyStrength >= minStrength && maxBuyCycle >= minMaxCycle && buyStrength >= sellStrength) {
-      if (priceExtreme && !isPriceLow(i, Math.round(maxBuyCycle / 2))) { /* skip */ }
-      else if (i + 1 < n) {
-        const hd = Math.round(maxBuyCycle / holdDivisor);
-        position = { type: "LONG", entryIdx: i + 1, entryPrice: bars[i + 1].open, exitIdx: Math.min(i + 1 + hd, n - 1), holdDuration: hd, maxCycle: maxBuyCycle, maxOrder: maxBuyOrder, time: bars[i + 1].time, strength: buyStrength };
-      }
-    } else if (sellStrength >= minStrength && maxSellCycle >= minMaxCycle) {
-      if (priceExtreme && !isPriceHigh(i, Math.round(maxSellCycle / 2))) { /* skip */ }
-      else if (i + 1 < n) {
-        const hd = Math.round(maxSellCycle / holdDivisor);
-        position = { type: "SHORT", entryIdx: i + 1, entryPrice: bars[i + 1].open, exitIdx: Math.min(i + 1 + hd, n - 1), holdDuration: hd, maxCycle: maxSellCycle, maxOrder: maxSellOrder, time: bars[i + 1].time, strength: sellStrength };
-      }
-    }
-  }
-  if (position) {
-    const exitPrice = bars[n - 1].close;
-    const ret = position.type === "LONG" ? (exitPrice / position.entryPrice - 1) * 100 : (position.entryPrice / exitPrice - 1) * 100;
-    signals.push({ ...position, exitPrice, exitActualIdx: n - 1, returnPct: +ret.toFixed(3), won: ret > 0 });
-  }
-  return signals;
-}
 
 const FALLBACK_COINS = ["ETHUSDT","BTCUSDT","XRPUSDT","SOLUSDT","BNBUSDT","ADAUSDT","DOGEUSDT","LINKUSDT","AVAXUSDT","DOTUSDT","LTCUSDT","SHIBUSDT","UNIUSDT","TRXUSDT","XLMUSDT","BCHUSDT","HBARUSDT","ZECUSDT","SUIUSDT","TONUSDT"];
 const OPT_STRENGTHS = [1, 2, 3, 5, 8];
@@ -147,7 +48,7 @@ export default function FracmapScanner() {
   const [cycleMax, setCycleMax] = useState(20);
   const [randomMode, setRandomMode] = useState(false);
   const [excludedCoins, setExcludedCoins] = useState<Set<string>>(() => {
-    try { const s = sessionStorage.getItem("ntlgnc_excluded_coins"); return s ? new Set(JSON.parse(s)) : new Set(); } catch { return new Set(); }
+    try { const s = sessionStorage.getItem("fracmap_excluded_coins"); return s ? new Set(JSON.parse(s)) : new Set(); } catch { return new Set(); }
   });
   const [coinResults, setCoinResults] = useState<CoinResult[]>([]);
   const [uniResults, setUniResults] = useState<UniResult[]>([]);
@@ -156,7 +57,7 @@ export default function FracmapScanner() {
   const [view, setView] = useState<"universal" | "coins">("universal");
   const [metric, setMetric] = useState<"sharpe" | "winRate" | "totalRet">("sharpe");
   const [runHistory, setRunHistory] = useState<RunSnapshot[]>(() => {
-    try { const s = sessionStorage.getItem("ntlgnc_scanner_runs"); return s ? JSON.parse(s) : []; } catch { return []; }
+    try { const s = sessionStorage.getItem("fracmap_scanner_runs"); return s ? JSON.parse(s) : []; } catch { return []; }
   });
   const [activeRun, setActiveRun] = useState<number>(-1); // -1 = live/latest
   const [appendMode, setAppendMode] = useState(false);
@@ -166,7 +67,7 @@ export default function FracmapScanner() {
     try {
       // Only persist last 5 runs to avoid exceeding storage limits
       const toStore = runHistory.slice(-5);
-      sessionStorage.setItem("ntlgnc_scanner_runs", JSON.stringify(toStore));
+      sessionStorage.setItem("fracmap_scanner_runs", JSON.stringify(toStore));
     } catch {}
   }, [runHistory]);
 
@@ -175,11 +76,15 @@ export default function FracmapScanner() {
     fetch("/api/coins").then(r => r.json()).then(d => {
       if (d.coins?.length > 0) setAllCoins(d.coins);
     }).catch(() => {});
+    // Fetch market-cap rankings (cached 24h server-side)
+    fetch("/api/coins?action=market-cap-rank").then(r => r.json()).then(d => {
+      if (d.rankings) setMcapRanks(d.rankings);
+    }).catch(() => {});
   }, []);
 
   // Persist excluded coins
   useEffect(() => {
-    try { sessionStorage.setItem("ntlgnc_excluded_coins", JSON.stringify([...excludedCoins])); } catch {}
+    try { sessionStorage.setItem("fracmap_excluded_coins", JSON.stringify([...excludedCoins])); } catch {}
   }, [excludedCoins]);
 
   const activeCoins = useMemo(() => allCoins.filter(c => !excludedCoins.has(c)), [excludedCoins, allCoins]);
@@ -198,12 +103,12 @@ export default function FracmapScanner() {
       setProgress(`✅ Restored previous run — ${last.combos.length} combos × ${last.coinResults.length} coins · ${last.totalBars.toLocaleString()} total bars`);
       // Restore OOS results if saved
       try {
-        const oos = sessionStorage.getItem("ntlgnc_scanner_oos");
+        const oos = sessionStorage.getItem("fracmap_scanner_oos");
         if (oos) { const d = JSON.parse(oos); setOosResults(d.results || []); setOosWinner(d.winner || null); }
       } catch {}
       // Restore regime signals + refetch bars (signals are small, bars are too big for sessionStorage)
       try {
-        const regRaw = sessionStorage.getItem("ntlgnc_scanner_regime_sigs");
+        const regRaw = sessionStorage.getItem("fracmap_scanner_regime_sigs");
         if (regRaw) {
           const reg = JSON.parse(regRaw);
           if (reg.oos && Object.keys(reg.oos).length > 0) {
@@ -220,7 +125,7 @@ export default function FracmapScanner() {
                 const batch = syms.slice(i, i + BATCH);
                 await Promise.all(batch.map(async (sym) => {
                   try {
-                    const res = await fetch(`/api/fracmap?action=chart&symbol=${sym}&barMinutes=${bm}&cycle=75&order=1&limit=50000`);
+                    const res = await adminFetch(`/api/fracmap?action=chart&symbol=${sym}&barMinutes=${bm}&cycle=75&order=1&limit=999999`);
                     const data = await res.json();
                     if (data.bars?.length > 50) {
                       const splitIdx = Math.round(data.bars.length * 50 / 100);
@@ -245,6 +150,7 @@ export default function FracmapScanner() {
   const [auditing, setAuditing] = useState(false);
   const [auditProgress, setAuditProgress] = useState("");
   const [splitPct, setSplitPct] = useState(50); // % of data for in-sample
+  const [isStartYear, setIsStartYear] = useState(0); // IS data must start from this year
   const [oosResults, setOosResults] = useState<{ coin: string; bars: number; trades: number; sharpe: number; winRate: number; totalRet: number; profitFactor: number }[]>([]);
   const [oosWinner, setOosWinner] = useState<Combo | null>(null);
   // Regime analysis data — stored during OOS phase
@@ -256,12 +162,32 @@ export default function FracmapScanner() {
   const [saveName, setSaveName] = useState("");
   const [saving, setSaving] = useState(false);
   const [savingRow, setSavingRow] = useState<number|null>(null);
+  // OOS market-cap filter
+  const [oosTopN, setOosTopN] = useState<number | null>(null);
+  const [mcapRanks, setMcapRanks] = useState<Record<string, number>>({});
   const [saveMsg, setSaveMsg] = useState("");
   const [savedStrategies, setSavedStrategies] = useState<any[]>([]);
 
+  // Derived: OOS results filtered by market-cap top N
+  const oosDisplayResults = useMemo(() => {
+    if (!oosTopN || Object.keys(mcapRanks).length === 0) return oosResults;
+    return oosResults.filter(r => (mcapRanks[r.coin] ?? 999) <= oosTopN);
+  }, [oosResults, oosTopN, mcapRanks]);
+
+  // Derived: OOS signals filtered to match display results
+  const oosDisplaySignals = useMemo(() => {
+    if (!oosTopN || Object.keys(mcapRanks).length === 0) return regimeOosSignals;
+    const allowed = new Set(oosDisplayResults.map(r => r.coin));
+    const filtered: Record<string, any[]> = {};
+    for (const [sym, sigs] of Object.entries(regimeOosSignals)) {
+      if (allowed.has(sym)) filtered[sym] = sigs;
+    }
+    return filtered;
+  }, [regimeOosSignals, oosDisplayResults, oosTopN, mcapRanks]);
+
   // Load saved strategies on mount
   useEffect(() => {
-    fetch("/api/fracmap-strategy?action=list")
+    adminFetch("/api/fracmap-strategy?action=list")
       .then(r => r.json())
       .then(d => { if (d.strategies) setSavedStrategies(d.strategies); })
       .catch(() => {});
@@ -381,7 +307,7 @@ export default function FracmapScanner() {
 
     const allCR: CoinResult[] = [...prevCoinResults];
 
-    // Store full bar data for OOS phase
+    // ── PASS 1: Fetch all coin bars ──────────────────────────
     const coinBarCache: Record<string, any[]> = {};
 
     for (let ci = 0; ci < coinsToProcess.length; ci++) {
@@ -395,11 +321,9 @@ export default function FracmapScanner() {
 
       if (randomMode) {
         // ═══ Synthetic random walk ═══
-        // Match real crypto characteristics: ~0.03% per-bar vol for 1m bars
-        // Generate same number of bars as a real coin (~10k for ~7 days of 1m)
         const nBars = 10500;
-        const perBarVol = 0.0003; // ~0.03% std per minute ≈ realistic BTC 1m vol
-        let price = 100; // arbitrary starting price
+        const perBarVol = 0.0003;
+        let price = 100;
         const t0 = Date.now() - nBars * 60000;
         for (let i = 0; i < nBars; i++) {
           const u1 = Math.random(), u2 = Math.random();
@@ -418,35 +342,90 @@ export default function FracmapScanner() {
           price = close;
         }
         setProgress(`🎲 Generated ${nBars} random bars for ${symbol}`);
-        await new Promise(r => setTimeout(r, 0)); // yield to UI
+        await new Promise(r => setTimeout(r, 0));
       } else {
         try {
-          const res = await fetch(`/api/fracmap?action=chart&symbol=${symbol}&barMinutes=${barMinutes}&cycle=75&order=1&limit=50000`);
+          const res = await adminFetch(`/api/fracmap?action=chart&symbol=${symbol}&barMinutes=${barMinutes}&cycle=75&order=1&limit=999999`);
           const data = await res.json();
           if (data.bars?.length > 50) coinBars = data.bars.map((b: any) => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume || 0 }));
         } catch { continue; }
       }
       if (coinBars.length < 100) { setProgress(`${symbol} — skipped (${coinBars.length} bars)`); continue; }
+      coinBarCache[symbol] = coinBars;
+      await new Promise(r => setTimeout(r, 0));
+    }
 
-      // Split: use first N% for in-sample optimisation
+    // ── Determine IS eligibility based on isStartYear ────────
+    const allCachedSymbols = Object.keys(coinBarCache);
+    if (allCachedSymbols.length === 0) {
+      setProgress("⚠️ No coins with enough data");
+      setRunning(false);
+      return;
+    }
+
+    const isEligible: Set<string> = new Set();
+    const isExcluded: string[] = [];
+
+    if (isStartYear === 0) {
+      // OFF — all coins participate in IS (original behaviour)
+      for (const sym of allCachedSymbols) isEligible.add(sym);
+    } else {
+      const isStartDate = new Date(`${isStartYear}-01-01T00:00:00Z`).getTime();
+      for (const sym of allCachedSymbols) {
+        const coinFirstBar = new Date(coinBarCache[sym][0].time).getTime();
+        if (coinFirstBar <= isStartDate) {
+          isEligible.add(sym);
+        } else {
+          isExcluded.push(sym);
+        }
+      }
+    }
+
+    if (isEligible.size === 0) {
+      const sampleDates = allCachedSymbols.slice(0, 5).map(s => {
+        const d = new Date(coinBarCache[s][0].time).toISOString().slice(0,10);
+        return `${s.replace("USDT","")}: ${d}`;
+      }).join(", ");
+      setProgress(`⚠️ No coins have data back to ${isStartYear}-01-01. Earliest found: ${sampleDates}. Try a later year.`);
+      setRunning(false);
+      return;
+    }
+
+    setProgress(`IS${isStartYear > 0 ? ` from ${isStartYear}` : ""}: ${isEligible.size} coins eligible${isExcluded.length > 0 ? `, ${isExcluded.length} excluded (${isExcluded.slice(0, 8).map(s => s.replace("USDT","")).join(", ")}${isExcluded.length > 8 ? "..." : ""})` : ""}. Running optimisation...`);
+    await new Promise(r => setTimeout(r, 50));
+
+    // ── PASS 2: Run IS optimisation on eligible coins only ───
+    let processedIS = 0;
+
+    for (const symbol of allCachedSymbols) {
+      if (cancelRef.current) break;
+      if (!isEligible.has(symbol)) continue;
+
+      processedIS++;
+      const coinBars = coinBarCache[symbol];
       const splitIdx = Math.round(coinBars.length * splitPct / 100);
       const isBars = coinBars.slice(0, splitIdx);
-      coinBarCache[symbol] = coinBars; // cache full data for OOS
 
-      setProgress(`${symbol} (${ci+1}/${coinsToProcess.length}) — ${coinBars.length} total, ${isBars.length} in-sample (${splitPct}%), computing...`);
-      const highs = isBars.map((b: any) => b.high), lows = isBars.map((b: any) => b.low);
-      const bands: any[] = [];
-      for (const order of [1,2,3,4,5,6]) for (let cycle = cycleMin; cycle <= cycleMax; cycle++) { const r = computeFracmap(highs, lows, cycle, order); bands.push({ cycle, order, ...r }); }
-      setProgress(`${symbol} (${ci+1}/${coinsToProcess.length}) — ${isBars.length} IS bars, ${allCombos.length} combos...`);
-      const cr: CoinResult = { symbol, barsLoaded: isBars.length, comboSharpes: {}, comboWinRates: {}, comboTotalRets: {}, comboTrades: {}, bestComboKey: "", bestSharpe: -Infinity };
-      for (const combo of allCombos) {
-        const sigs = detectEnsembleSignals(isBars, bands, combo.minStr, combo.minCyc, combo.spike, combo.holdDiv, combo.nearMiss, combo.priceExt);
-        const m = calcMetrics(sigs, barMinutes, isBars.length);
-        cr.comboSharpes[combo.key] = m.sharpe; cr.comboWinRates[combo.key] = m.winRate; cr.comboTotalRets[combo.key] = m.totalRet; cr.comboTrades[combo.key] = m.trades;
-        if (m.sharpe > cr.bestSharpe) { cr.bestSharpe = m.sharpe; cr.bestComboKey = combo.key; }
-        uniAcc[combo.key].sharpes.push(m.sharpe); uniAcc[combo.key].winRates.push(m.winRate); uniAcc[combo.key].totalRets.push(m.totalRet); uniAcc[combo.key].trades.push(m.trades); uniAcc[combo.key].coinSharpes[symbol] = m.sharpe;
-      }
-      allCR.push(cr); setCoinResults([...allCR]);
+      setProgress(`IS ${symbol.replace("USDT","")} (${processedIS}/${isEligible.size}${isExcluded.length > 0 ? `, ${isExcluded.length} → OOS only` : ""}) — ${isBars.length} IS bars, computing...`);
+
+      // Server-side computation via fracmap compute API
+      try {
+        const res = await adminFetch("/api/fracmap/compute", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "batchScan", bars: isBars, barMinutes, cycleMin, cycleMax, combos: allCombos }),
+        });
+        const data = await res.json();
+        if (!data.comboMetrics) { setProgress(`IS ${symbol} — compute failed`); continue; }
+
+        const cr: CoinResult = { symbol, barsLoaded: isBars.length, comboSharpes: {}, comboWinRates: {}, comboTotalRets: {}, comboTrades: {}, bestComboKey: "", bestSharpe: -Infinity };
+        for (const combo of allCombos) {
+          const m = data.comboMetrics[combo.key] || { sharpe: 0, winRate: 0, totalRet: 0, trades: 0 };
+          cr.comboSharpes[combo.key] = m.sharpe; cr.comboWinRates[combo.key] = m.winRate; cr.comboTotalRets[combo.key] = m.totalRet; cr.comboTrades[combo.key] = m.trades;
+          if (m.sharpe > cr.bestSharpe) { cr.bestSharpe = m.sharpe; cr.bestComboKey = combo.key; }
+          uniAcc[combo.key].sharpes.push(m.sharpe); uniAcc[combo.key].winRates.push(m.winRate); uniAcc[combo.key].totalRets.push(m.totalRet); uniAcc[combo.key].trades.push(m.trades); uniAcc[combo.key].coinSharpes[symbol] = m.sharpe;
+        }
+        allCR.push(cr); setCoinResults([...allCR]);
+      } catch (e) { setProgress(`IS ${symbol} — error: ${(e as Error).message}`); continue; }
       await new Promise(r => setTimeout(r, 0));
     }
     const finals: UniResult[] = allCombos.map(c => { const a = uniAcc[c.key]; const nn = a.sharpes.length || 1; return { combo: c, avgSharpe: a.sharpes.reduce((s,v) => s+v, 0)/nn, avgWinRate: a.winRates.reduce((s,v) => s+v, 0)/nn, avgTotalRet: a.totalRets.reduce((s,v) => s+v, 0)/nn, avgTrades: a.trades.reduce((s,v) => s+v, 0)/nn, coinSharpes: a.coinSharpes, consistency: (a.sharpes.filter(s => s > 0).length / nn) * 100 }; });
@@ -496,7 +475,7 @@ export default function FracmapScanner() {
         for (const sym of existingOosCoins) {
           try {
             setProgress(`Re-fetching OOS data for ${sym} (winner changed)...`);
-            const res = await fetch(`/api/fracmap?action=chart&symbol=${sym}&barMinutes=${barMinutes}&cycle=75&order=1&limit=50000`);
+            const res = await adminFetch(`/api/fracmap?action=chart&symbol=${sym}&barMinutes=${barMinutes}&cycle=75&order=1&limit=999999`);
             const data = await res.json();
             if (data.bars?.length > 50) coinsThatNeedOos[sym] = data.bars.map((b: any) => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume || 0 }));
           } catch {}
@@ -514,25 +493,21 @@ export default function FracmapScanner() {
         const oosBars = fullBars.slice(splitIdx);
         if (oosBars.length < 50) continue;
 
-        const highs = oosBars.map((b: any) => b.high), lows = oosBars.map((b: any) => b.low);
-        const bands: any[] = [];
-        for (const order of [1,2,3,4,5,6]) for (let cycle = cycleMin; cycle <= cycleMax; cycle++) { const r = computeFracmap(highs, lows, cycle, order); bands.push({ cycle, order, ...r }); }
-        const sigs = detectEnsembleSignals(oosBars, bands, winner.minStr, winner.minCyc, winner.spike, winner.holdDiv, winner.nearMiss, winner.priceExt);
-        const m = calcMetrics(sigs, barMinutes, oosBars.length);
-        oosRows.push({ coin: symbol, bars: oosBars.length, trades: m.trades, sharpe: m.sharpe, winRate: m.winRate, totalRet: m.totalRet, profitFactor: m.profitFactor });
-        regSigs[symbol] = sigs;
-        regBars[symbol] = oosBars;
-
-        // Also compute IS signals for stability analysis
-        const isBars = fullBars.slice(0, splitIdx);
-        if (isBars.length >= 50) {
-          const isHighs = isBars.map((b: any) => b.high), isLows = isBars.map((b: any) => b.low);
-          const isBands: any[] = [];
-          for (const order of [1,2,3,4,5,6]) for (let cycle = cycleMin; cycle <= cycleMax; cycle++) { const r = computeFracmap(isHighs, isLows, cycle, order); isBands.push({ cycle, order, ...r }); }
-          const isSigs = detectEnsembleSignals(isBars, isBands, winner.minStr, winner.minCyc, winner.spike, winner.holdDiv, winner.nearMiss, winner.priceExt);
-          regIsSigs[symbol] = isSigs;
-          regIsBars[symbol] = isBars;
-        }
+        // Server-side OOS computation via fracmap compute API
+        try {
+          const res = await adminFetch("/api/fracmap/compute", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "computeOOS", bars: fullBars, barMinutes, cycleMin, cycleMax, splitPct, combo: winner, includeIS: true }),
+          });
+          const data = await res.json();
+          if (!data.oosMetrics) continue;
+          const m = data.oosMetrics;
+          oosRows.push({ coin: symbol, bars: data.oosBarsCount || oosBars.length, trades: m.trades, sharpe: m.sharpe, winRate: m.winRate, totalRet: m.totalRet, profitFactor: m.profitFactor });
+          regSigs[symbol] = data.oosSignals || [];
+          regBars[symbol] = data.oosBars || oosBars;
+          if (data.isSignals) regIsSigs[symbol] = data.isSignals;
+          if (data.isBars) regIsBars[symbol] = data.isBars;
+        } catch { continue; }
         await new Promise(r => setTimeout(r, 0)); // yield to UI thread
       }
       setProgress(`Setting OOS results (${oosRows.length} coins)...`);
@@ -542,11 +517,11 @@ export default function FracmapScanner() {
       setRegimeIsSignals(regIsSigs);
       setRegimeIsBars(regIsBars);
       await new Promise(r => setTimeout(r, 50)); // let React render before heavy serialization
-      try { sessionStorage.setItem("ntlgnc_scanner_oos", JSON.stringify({ results: oosRows, winner })); } catch {}
+      try { sessionStorage.setItem("fracmap_scanner_oos", JSON.stringify({ results: oosRows, winner })); } catch {}
       try {
         // Only save signals (not bars) and cap at 2MB to avoid freezing on serialize
         const regJson = JSON.stringify({ oos: regSigs, is: regIsSigs });
-        if (regJson.length < 2_000_000) sessionStorage.setItem("ntlgnc_scanner_regime_sigs", regJson);
+        if (regJson.length < 2_000_000) sessionStorage.setItem("fracmap_scanner_regime_sigs", regJson);
       } catch (e) { /* too large, skip */ }
     }
     // Save snapshot
@@ -562,9 +537,9 @@ export default function FracmapScanner() {
     };
     setRunHistory(prev => [...prev, snapshot]);
     setActiveRun(-1);
-    setProgress(`✅ Complete${randomMode ? " 🎲 RANDOM WALK" : ""} — ${allCombos.length} combos × ${totalCoins} coins${appendMode ? ` (${coinsToProcess.length} new + ${prevCoinResults.length} existing)` : ""} · ${snapshot.totalBars.toLocaleString()} total bars analysed`);
+    setProgress(`✅ Complete${randomMode ? " 🎲 RANDOM WALK" : ""} — ${allCombos.length} combos × ${isEligible.size} IS coins (${isExcluded.length} excluded, IS from ${isStartYear})${appendMode ? ` (+${prevCoinResults.length} existing)` : ""} · ${snapshot.totalBars.toLocaleString()} total bars analysed`);
     setRunning(false);
-  }, [barMinutes, splitPct, cycleMin, cycleMax, appendMode, randomMode, coinResults, oosResults, regimeOosSignals, regimeCoinBars]);
+  }, [barMinutes, splitPct, cycleMin, cycleMax, isStartYear, appendMode, randomMode, coinResults, oosResults, regimeOosSignals, regimeCoinBars]);
 
   // Active data: either live state or a historical snapshot
   const activeSnapshot = activeRun >= 0 ? runHistory[activeRun] : null;
@@ -577,7 +552,7 @@ export default function FracmapScanner() {
     setSavingRow(idx);
     try {
       const nm = `V${idx+1} ×${r.combo.minStr} C≥${r.combo.minCyc||"∞"} ${r.combo.spike?"⚡":"–"} ${r.combo.nearMiss?"±":"–"} ÷${r.combo.holdDiv}`;
-      const res = await fetch("/api/fracmap-strategy", {
+      const res = await adminFetch("/api/fracmap-strategy", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "saveStrategy", name: nm, type: "universal", barMinutes: activeBarMin,
@@ -591,7 +566,7 @@ export default function FracmapScanner() {
       });
       const d = await res.json();
       if (d.strategy) {
-        const r2 = await fetch("/api/fracmap-strategy?action=list"); const d2 = await r2.json();
+        const r2 = await adminFetch("/api/fracmap-strategy?action=list"); const d2 = await r2.json();
         if (d2.strategies) setSavedStrategies(d2.strategies);
       }
     } catch {}
@@ -616,6 +591,7 @@ export default function FracmapScanner() {
               Core model: cycles {cycleMin}–{cycleMax}, step 1, all 6 φ orders.
               Data is split: <strong style={{ color: "#a78bfa" }}>first {splitPct}% for optimisation</strong>, remaining <strong style={{ color: "#a78bfa" }}>{100 - splitPct}% for out-of-sample validation</strong>.
               The winning combo is tested on unseen data to verify the edge is real.
+              Coins must have data back to <strong style={{ color: "#a78bfa" }}>{isStartYear}</strong> to participate in IS — newer coins are validated in OOS only.
             </div>
           </div>
         </div>
@@ -658,16 +634,37 @@ export default function FracmapScanner() {
           <div className="w-px h-5 bg-[var(--border)] opacity-30" />
 
           <span className="text-[9px] font-mono text-[var(--text-dim)]">CYCLES:</span>
-          <input type="number" min={2} max={cycleMax - 1} value={cycleMin} onChange={e => setCycleMin(Math.max(2, Math.min(cycleMax - 1, +e.target.value)))} disabled={running}
+          <input type="number" value={cycleMin} onChange={e => setCycleMin(+e.target.value || 0)}
+            onBlur={() => setCycleMin(Math.max(2, Math.min(cycleMax - 1, cycleMin)))} disabled={running}
             className="w-10 px-1 py-0.5 rounded text-[9px] font-mono font-semibold border text-center bg-transparent"
             style={{ borderColor: GOLD + "40", color: GOLD }} />
           <span className="text-[8px] font-mono text-[var(--text-dim)]">–</span>
-          <input type="number" min={cycleMin + 1} max={200} value={cycleMax} onChange={e => setCycleMax(Math.max(cycleMin + 1, Math.min(200, +e.target.value)))} disabled={running}
+          <input type="number" value={cycleMax} onChange={e => setCycleMax(+e.target.value || 0)}
+            onBlur={() => setCycleMax(Math.max(cycleMin + 1, Math.min(200, cycleMax)))} disabled={running}
             className="w-10 px-1 py-0.5 rounded text-[9px] font-mono font-semibold border text-center bg-transparent"
             style={{ borderColor: GOLD + "40", color: GOLD }} />
 
+          <div className="w-px h-5 bg-[var(--border)] opacity-30" />
+
+          <span className="text-[9px] font-mono text-[var(--text-dim)]">OOS TOP:</span>
+          <input type="number" value={oosTopN ?? ""} placeholder="All"
+            onChange={e => { const v = e.target.value; setOosTopN(v === "" ? null : +v); }}
+            onBlur={() => { if (oosTopN != null) setOosTopN(Math.max(5, Math.min(200, oosTopN))); }} disabled={running}
+            className="w-12 px-1 py-0.5 rounded text-[9px] font-mono font-semibold border text-center bg-transparent"
+            style={{ borderColor: oosTopN ? "#22c55e40" : "var(--border)", color: oosTopN ? "#22c55e" : "var(--text-dim)" }} />
+          <span className="text-[8px] font-mono text-[var(--text-dim)]">{oosTopN ? `top ${oosTopN} by mcap` : "all coins"}</span>
+
           <div className="flex-1" />
           <span className="text-[9px] font-mono text-[var(--text-dim)]">{activeCoins.length} coins × {combos.length || 320} combos = {(activeCoins.length * (combos.length || 320)).toLocaleString()} backtests</span>
+        </div>
+        <div className="flex items-center gap-4 mt-2 pt-2 border-t border-[var(--border)]">
+          <span className="text-[9px] font-mono text-[var(--text-dim)]">IS FROM:</span>
+          {[2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 0].map(y => (
+            <button key={y} onClick={() => setIsStartYear(y)} disabled={running}
+              className="px-2 py-0.5 rounded text-[9px] font-mono font-semibold border transition-all"
+              style={{ background: isStartYear === y ? (y === 0 ? "rgba(239,68,68,0.12)" : "rgba(167,139,250,0.12)") : "transparent", borderColor: isStartYear === y ? (y === 0 ? "#ef444440" : "#a78bfa40") : "var(--border)", color: isStartYear === y ? (y === 0 ? "#ef4444" : "#a78bfa") : "var(--text-dim)" }}>{y === 0 ? "OFF" : y}</button>
+          ))}
+          <span className="text-[8px] font-mono text-[var(--text-dim)]">{isStartYear === 0 ? "All coins participate in IS (original behaviour)" : `Coins without data back to ${isStartYear} are excluded from IS but still tested in OOS`}</span>
         </div>
         <div className="flex items-center gap-3 mt-2 pt-2 border-t border-[var(--border)]">
           <label className="flex items-center gap-1.5 cursor-pointer select-none">
@@ -809,6 +806,11 @@ export default function FracmapScanner() {
           <div className="bg-[var(--bg-card)] border-2 rounded-lg p-4 mb-4" style={{ borderColor: "#a78bfa60" }}>
             <div className="flex items-center gap-3 mb-3">
               <span className="text-[11px] font-mono font-bold" style={{ color: "#a78bfa" }}>📊 OUT-OF-SAMPLE VALIDATION ({100 - splitPct}% unseen data)</span>
+              {oosTopN && Object.keys(mcapRanks).length > 0 && oosDisplayResults.length < oosResults.length && (
+                <span className="px-2 py-0.5 rounded text-[8px] font-mono font-bold" style={{ background: "rgba(34,197,94,0.1)", color: "#22c55e", border: "1px solid rgba(34,197,94,0.2)" }}>
+                  Top {oosTopN} by mcap ({oosDisplayResults.length}/{oosResults.length} coins)
+                </span>
+              )}
               <span className="text-[9px] font-mono text-[var(--text-dim)]">
                 Winner tested on data it was never optimised on
               </span>
@@ -816,11 +818,12 @@ export default function FracmapScanner() {
 
             {/* OOS Summary */}
             {(() => {
-              const avgSR = oosResults.reduce((s, r) => s + r.sharpe, 0) / oosResults.length;
-              const avgWR = oosResults.reduce((s, r) => s + r.winRate, 0) / oosResults.length;
-              const avgRet = oosResults.reduce((s, r) => s + r.totalRet, 0) / oosResults.length;
-              const avgPF = oosResults.reduce((s, r) => s + (isFinite(r.profitFactor) ? r.profitFactor : 0), 0) / oosResults.length;
-              const posCount = oosResults.filter(r => r.sharpe > 0).length;
+              const dr = oosDisplayResults;
+              const avgSR = dr.reduce((s, r) => s + r.sharpe, 0) / dr.length;
+              const avgWR = dr.reduce((s, r) => s + r.winRate, 0) / dr.length;
+              const avgRet = dr.reduce((s, r) => s + r.totalRet, 0) / dr.length;
+              const avgPF = dr.reduce((s, r) => s + (isFinite(r.profitFactor) ? r.profitFactor : 0), 0) / dr.length;
+              const posCount = dr.filter(r => r.sharpe > 0).length;
               return (
                 <div className="flex gap-6 mb-3 p-3 rounded-lg border border-[var(--border)]" style={{ background: "rgba(167,139,250,0.04)" }}>
                   <div>
@@ -835,8 +838,8 @@ export default function FracmapScanner() {
                   </div>
                   <div>
                     <div className="text-[8px] font-mono text-[var(--text-dim)]">OOS Consistency</div>
-                    <div className="text-[16px] font-mono font-bold tabular-nums" style={{ color: posCount / oosResults.length > 0.6 ? "#22c55e" : "#eab308" }}>
-                      {posCount}/{oosResults.length} positive
+                    <div className="text-[16px] font-mono font-bold tabular-nums" style={{ color: posCount / dr.length > 0.6 ? "#22c55e" : "#eab308" }}>
+                      {posCount}/{dr.length} positive
                     </div>
                   </div>
                   <div>
@@ -870,18 +873,19 @@ export default function FracmapScanner() {
                 </tr>
               </thead>
               <tbody>
-                {oosResults.sort((a, b) => b.sharpe - a.sharpe).map(r => {
+                {[...oosDisplayResults].sort((a, b) => b.sharpe - a.sharpe).map(r => {
                   const isSharpe = sorted[0]?.coinSharpes[r.coin] || 0;
                   const decay = isSharpe !== 0 ? ((r.sharpe / isSharpe) * 100) : 0;
+                  const mcapRank = mcapRanks[r.coin];
                   return (
                     <tr key={r.coin} className="border-b border-[var(--border)] border-opacity-20">
-                      <td className="px-1.5 py-1 font-semibold">{r.coin.replace("USDT","")}</td>
+                      <td className="px-1.5 py-1 font-semibold">{r.coin.replace("USDT","")}{mcapRank ? <span className="text-[7px] text-[var(--text-dim)] ml-1">#{mcapRank}</span> : ""}</td>
                       <td className="px-1.5 py-1 text-right text-[var(--text-dim)] tabular-nums">{r.bars.toLocaleString()}</td>
                       <td className="px-1.5 py-1 text-right text-[var(--text-dim)] tabular-nums">{r.trades}</td>
-                      <td className="px-1.5 py-1 text-right font-semibold tabular-nums" style={{ color: r.sharpe > 0 ? "#22c55e" : "#ef4444", background: sharpeColor(r.sharpe, Math.max(...oosResults.map(x => Math.abs(x.sharpe)), 0.01)) }}>{r.sharpe.toFixed(3)}</td>
+                      <td className="px-1.5 py-1 text-right font-semibold tabular-nums" style={{ color: r.sharpe > 0 ? "#22c55e" : "#ef4444", background: sharpeColor(r.sharpe, Math.max(...oosDisplayResults.map(x => Math.abs(x.sharpe)), 0.01)) }}>{r.sharpe.toFixed(3)}</td>
                       <td className="px-1.5 py-1 text-right tabular-nums" style={{ color: r.winRate > 55 ? "#22c55e" : "#eab308" }}>{r.winRate.toFixed(1)}%</td>
                       <td className="px-1.5 py-1 text-right tabular-nums" style={{ color: r.totalRet > 0 ? "#22c55e" : "#ef4444" }}>{r.totalRet > 0 ? "+" : ""}{r.totalRet.toFixed(2)}%</td>
-                      <td className="px-1.5 py-1 text-right tabular-nums" style={{ color: r.profitFactor > 1 ? "#22c55e" : "#ef4444" }}>{isFinite(r.profitFactor) ? r.profitFactor.toFixed(2) : "∞"}</td>
+                      <td className="px-1.5 py-1 text-right tabular-nums" style={{ color: (r.profitFactor ?? 0) > 1 ? "#22c55e" : "#ef4444" }}>{r.profitFactor != null && isFinite(r.profitFactor) ? r.profitFactor.toFixed(2) : "–"}</td>
                       <td className="px-2 py-1">
                         <div className="flex items-center gap-1">
                           <span className="tabular-nums" style={{ color: isSharpe > 0 ? "#22c55e80" : "#ef444480" }}>{isSharpe.toFixed(1)}</span>
@@ -919,7 +923,7 @@ export default function FracmapScanner() {
 
         {/* Cumulative Returns + Net Position + Worst Trade Analysis */}
         {oosResults.length > 0 && Object.keys(regimeOosSignals).length > 0 && (
-          <ScannerExtras oosSignals={regimeOosSignals} oosResults={oosResults} />
+          <ScannerExtras oosSignals={oosDisplaySignals} oosResults={oosDisplayResults} />
         )}
 
         {/* Hedged Strategy — pairs opposite signals for market-neutral exposure */}
@@ -1120,9 +1124,9 @@ export default function FracmapScanner() {
                     {(s.winRate||0).toFixed(1)}%
                   </div>
                   <button onClick={async () => {
-                    await fetch("/api/fracmap-strategy", { method: "POST", headers: { "Content-Type": "application/json" },
+                    await adminFetch("/api/fracmap-strategy", { method: "POST", headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ action: "toggleStrategy", id: s.id, active: !s.active }) });
-                    const r = await fetch("/api/fracmap-strategy?action=list");
+                    const r = await adminFetch("/api/fracmap-strategy?action=list");
                     const d = await r.json();
                     if (d.strategies) setSavedStrategies(d.strategies);
                   }}
@@ -1132,9 +1136,9 @@ export default function FracmapScanner() {
                   </button>
                   <button onClick={async () => {
                     if (!confirm(`Delete "${s.name}"?`)) return;
-                    await fetch("/api/fracmap-strategy", { method: "POST", headers: { "Content-Type": "application/json" },
+                    await adminFetch("/api/fracmap-strategy", { method: "POST", headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ action: "deleteStrategy", id: s.id }) });
-                    const r = await fetch("/api/fracmap-strategy?action=list");
+                    const r = await adminFetch("/api/fracmap-strategy?action=list");
                     const d = await r.json();
                     if (d.strategies) setSavedStrategies(d.strategies);
                   }}
@@ -1163,7 +1167,7 @@ export default function FracmapScanner() {
                 <span>IS Sharpe: <strong style={{ color: "#22c55e" }}>{sorted[0].avgSharpe.toFixed(3)}</strong></span>
                 <span>Consistency: {sorted[0].consistency.toFixed(0)}%</span>
                 <span>Win%: {sorted[0].avgWinRate.toFixed(1)}%</span>
-                {oosResults.length > 0 && <span>OOS Sharpe: <strong style={{ color: "#a78bfa" }}>{(oosResults.reduce((s,r) => s+r.sharpe,0)/oosResults.length).toFixed(3)}</strong></span>}
+                {oosDisplayResults.length > 0 && <span>OOS Sharpe: <strong style={{ color: "#a78bfa" }}>{(oosDisplayResults.reduce((s,r) => s+r.sharpe,0)/oosDisplayResults.length).toFixed(3)}</strong>{oosTopN ? <span className="text-[8px] text-[var(--text-dim)]"> (top {oosTopN})</span> : ""}</span>}
               </div>
             </div>
 
@@ -1180,10 +1184,10 @@ export default function FracmapScanner() {
               <button onClick={async () => {
                 setSaving(true); setSaveMsg("");
                 try {
-                  const avgOosSR = oosResults.length > 0 ? oosResults.reduce((s,r)=>s+r.sharpe,0)/oosResults.length : null;
-                  const avgOosWR = oosResults.length > 0 ? oosResults.reduce((s,r)=>s+r.winRate,0)/oosResults.length : null;
-                  const avgOosPF = oosResults.length > 0 ? oosResults.reduce((s,r)=>s+(isFinite(r.profitFactor)?r.profitFactor:0),0)/oosResults.length : null;
-                  const res = await fetch("/api/fracmap-strategy", {
+                  const avgOosSR = oosDisplayResults.length > 0 ? oosDisplayResults.reduce((s,r)=>s+r.sharpe,0)/oosDisplayResults.length : null;
+                  const avgOosWR = oosDisplayResults.length > 0 ? oosDisplayResults.reduce((s,r)=>s+r.winRate,0)/oosDisplayResults.length : null;
+                  const avgOosPF = oosDisplayResults.length > 0 ? oosDisplayResults.reduce((s,r)=>s+(isFinite(r.profitFactor)?r.profitFactor:0),0)/oosDisplayResults.length : null;
+                  const res = await adminFetch("/api/fracmap-strategy", {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                       action: "saveStrategy", name: saveName, type: "universal", barMinutes: activeBarMin,
@@ -1195,12 +1199,13 @@ export default function FracmapScanner() {
                       consistency: sorted[0].consistency,
                       totalTrades: Math.round(sorted[0].avgTrades * activeCoinResults.length),
                       splitPct, cycleMin, cycleMax,
+                      config: oosTopN ? { coin_universe_top_n: oosTopN } : undefined,
                     })
                   });
                   const d = await res.json();
                   if (d.strategy) {
                     setSaveMsg(`✅ Saved "${saveName}" (id: ${d.strategy.id.slice(0,8)}...)`);
-                    const r2 = await fetch("/api/fracmap-strategy?action=list");
+                    const r2 = await adminFetch("/api/fracmap-strategy?action=list");
                     const d2 = await r2.json();
                     if (d2.strategies) setSavedStrategies(d2.strategies);
                   } else { setSaveMsg(`❌ ${d.error || "Unknown error"}`); }
@@ -1225,7 +1230,7 @@ export default function FracmapScanner() {
                       pf: 0, trades: cr.comboTrades[cr.bestComboKey] || 0,
                     };
                   }).filter(Boolean);
-                  const res = await fetch("/api/fracmap-strategy", {
+                  const res = await adminFetch("/api/fracmap-strategy", {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                       action: "savePerCoinStrategies", name: saveName, barMinutes: activeBarMin, splitPct, strategies: coinStrats
@@ -1234,7 +1239,7 @@ export default function FracmapScanner() {
                   const d = await res.json();
                   if (d.strategies) {
                     setSaveMsg(`✅ Saved ${d.strategies.length} per-coin strategies`);
-                    const r2 = await fetch("/api/fracmap-strategy?action=list");
+                    const r2 = await adminFetch("/api/fracmap-strategy?action=list");
                     const d2 = await r2.json();
                     if (d2.strategies) setSavedStrategies(d2.strategies);
                   } else { setSaveMsg(`❌ ${d.error || "Unknown error"}`); }
@@ -1342,25 +1347,19 @@ function AlphaAnalysis({ winner, coinResults, barMinutes, cycleMin = 5, cycleMax
       const cr = coinResults[ci];
       setProgress(`${cr.symbol} (${ci + 1}/${coinResults.length}) — fetching & computing...`);
 
+      // Server-side OOS computation via fracmap compute API
+      let sigs: any[] = [];
       let coinBars: any[] = [];
       try {
-        const res = await fetch(`/api/fracmap?action=chart&symbol=${cr.symbol}&barMinutes=${barMinutes}&cycle=75&order=1&limit=50000`);
+        const res = await adminFetch("/api/fracmap/compute", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "computeOOS", symbol: cr.symbol, barMinutes, cycleMin, cycleMax, splitPct, combo }),
+        });
         const data = await res.json();
-        if (data.bars?.length > 50) coinBars = data.bars.map((b: any) => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume || 0 }));
+        if (!data.oosSignals || data.oosSignals.length < 3) continue;
+        sigs = data.oosSignals;
+        coinBars = data.oosBars || [];
       } catch { continue; }
-      if (coinBars.length < 100) continue;
-
-      // Use only OOS portion (second half) — alpha must be measured on unseen data
-      const splitIdx = Math.round(coinBars.length * splitPct / 100);
-      coinBars = coinBars.slice(splitIdx);
-      if (coinBars.length < 50) continue;
-
-      const highs = coinBars.map((b: any) => b.high), lows = coinBars.map((b: any) => b.low);
-      const bands: any[] = [];
-      for (const order of [1,2,3,4,5,6]) for (let cycle = cycleMin; cycle <= cycleMax; cycle++) {
-        const r = computeFracmap(highs, lows, cycle, order); bands.push({ cycle, order, ...r });
-      }
-      const sigs = detectEnsembleSignals(coinBars, bands, combo.minStr, combo.minCyc, combo.spike, combo.holdDiv, combo.nearMiss, combo.priceExt);
       if (sigs.length < 3) continue;
 
       // Split by direction
@@ -1876,7 +1875,7 @@ function ScannerExtras({ oosSignals, oosResults }: { oosSignals: Record<string, 
           <div className="border-t border-[var(--border)] pt-3">
             <div className="text-[9px] font-mono text-[var(--text-dim)] mb-2">Click coin for individual equity curve:</div>
             <div className="flex flex-wrap gap-1 mb-3">
-              {oosResults.sort((a: any, b: any) => b.sharpe - a.sharpe).map((r: any) => (
+              {[...oosResults].sort((a: any, b: any) => b.sharpe - a.sharpe).map((r: any) => (
                 <button key={r.coin} onClick={() => setSelCoin(selCoin === r.coin ? null : r.coin)}
                   className="px-1.5 py-0.5 rounded text-[8px] font-mono font-bold border transition-all"
                   style={{

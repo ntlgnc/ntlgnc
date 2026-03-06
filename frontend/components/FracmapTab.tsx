@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { adminFetch } from "@/lib/admin-fetch";
 
 /* ═══ TYPES ═══ */
 type ScanResult = {
@@ -83,7 +84,7 @@ export default function FracmapTab() {
     setScanning(true); setHasScanned(true);
     try {
       const bmParam = scanBarMin > 0 ? `&barMinutes=${scanBarMin}` : "";
-      const res = await fetch(`/api/fracmap?action=scan${bmParam}&minTrades=${scanMinTrades}`);
+      const res = await adminFetch(`/api/fracmap?action=scan${bmParam}&minTrades=${scanMinTrades}`);
       const data = await res.json();
       setScanResults(data.results || []); setSymbols(data.symbols || []);
     } catch {} setScanning(false);
@@ -94,7 +95,7 @@ export default function FracmapTab() {
     try {
       const lim = barLimit(bm);
       const centerParam = centerBar != null ? `&centerBar=${centerBar}` : "";
-      const res = await fetch(`/api/fracmap?action=chart&symbol=${sym}&barMinutes=${bm}&cycle=${cyc}&order=${ord}&limit=${lim}${centerParam}`);
+      const res = await adminFetch(`/api/fracmap?action=chart&symbol=${sym}&barMinutes=${bm}&cycle=${cyc}&order=${ord}&limit=${lim}${centerParam}`);
       const data = await res.json();
       setChartBars(data.bars || []); setChartSignals(data.signals || []); setAllSignals(data.allSignals || []); setChartMetrics(data.metrics || null);
     } catch {} setChartLoading(false);
@@ -121,7 +122,7 @@ export default function FracmapTab() {
   const loadLiveExplicit = useCallback(async (sym: string, bm: number, cyc: number, ord: number) => {
     try {
       const params = new URLSearchParams({ action: "live", symbol: sym, cycle: String(cyc), order: String(ord), barMinutes: String(bm), viewBars: String(barLimit(bm)) });
-      const res = await fetch(`/api/fracmap?${params}`);
+      const res = await adminFetch(`/api/fracmap?${params}`);
       const data = await res.json();
       setLiveCandles(data.candles || []); setLiveSignals(data.signals || []);
       setLiveLastUpdate(data.lastUpdated); setLiveBandDist(data.bandDistance || null);

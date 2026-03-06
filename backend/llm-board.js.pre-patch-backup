@@ -1,0 +1,3173 @@
+/**
+ * ╔══════════════════════════════════════════════════════════════════╗
+ * ║  NTLGNC — LLM STRATEGY BOARD v3                                 ║
+ * ║  8-Phase Structured Meeting Protocol + BTC Forecast              ║
+ * ║                                                                  ║
+ * ║  Phase 1: Situational Awareness (Chair)                         ║
+ * ║  Phase 2: Problem Identification (All)                          ║
+ * ║  Phase 3: Problem Prioritisation (Chair)                        ║
+ * ║  Phase 4: Solution Discussion (All)                             ║
+ * ║  Phase 5: Vote (All)                                            ║
+ * ║  Phase 6: Implementation (Auto)                                 ║
+ * ║  Phase 7: Follow-up Target (Chair)                              ║
+ * ║  Phase 8: Review (Auto, start of next meeting)                  ║
+ * ╚══════════════════════════════════════════════════════════════════╝
+ */
+
+import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import { existsSync } from 'fs';
+
+// Robust .env loading — search multiple locations like other backend scripts
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const envCandidates = [
+  join(__dirname, '.env'),
+  join(__dirname, '.env.local'),
+  join(process.cwd(), '.env'),
+  join(process.cwd(), '.env.local'),
+  join(__dirname, '..', '.env'),
+  join(__dirname, '..', '.env.local'),
+];
+const envPath = envCandidates.find(p => existsSync(p));
+if (envPath) {
+  dotenv.config({ path: envPath });
+  console.log(`[board] Loaded env from ${envPath}`);
+} else {
+  dotenv.config(); // fallback
+  console.log(`[board] ⚠ No .env found in searched paths`);
+}
+import pg from 'pg';
+
+const { Pool } = pg;
+const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
+
+// ── Coin Strategy Manager (per-coin filtered strategy instances) ──
+import { createRequire } from 'module';
+const require_cjs = createRequire(import.meta.url);
+const coinStrategyManager = require_cjs('./coin-strategy-manager.cjs');
+
+// ═══════════════════════════════════════════════════════════════
+// GENESIS DOCUMENT — Injected into every board member's system prompt
+// ═══════════════════════════════════════════════════════════════
+
+const GENESIS_DOCUMENT = `
+╔══════════════════════════════════════════════════════════════════╗
+║  NTLGNC STRATEGY BOARD — GENESIS DOCUMENT                       ║
+║  Founding Charter v1.0 — February 2026                          ║
+╚══════════════════════════════════════════════════════════════════╝
+
+1. WHAT WE ARE
+You are a member of the NTLGNC Strategy Board — five AI models that govern
+an autonomous cryptocurrency trading signal system. You meet hourly. Your
+decisions deploy to live trading automatically. Real money is at stake.
+
+The system trades ~100 pairs on Binance using the proprietary Fracmap indicator.
+YOU CANNOT SEE OR MODIFY FRACMAP. You see only signal outputs, performance data,
+and regime conditions. Your job: make signals BETTER through filtering and rules.
+
+2. THE THREE SYSTEMS
+  1m:  Fastest, 1-minute bars, per-coin optimised, ~100+ signals/day
+  1H:  Medium, 1-hour bars, universal strategy, ~20-40 signals/day  
+  1D:  Slowest, daily bars, highest conviction, ~5-15 signals/day
+
+3. WHAT YOU CAN DO
+  ✅ Add/remove/modify regime filters
+  ✅ Exclude/include coins
+  ✅ Per-coin parameter overrides
+  ✅ New regime features to test
+  ✅ Kill dead research lines
+  ✅ Emergency halt
+  ✅ Deploy per-coin filtered strategy instances (COIN_{SYMBOL}_{TF})
+  ❌ Cannot modify Fracmap computation, bands, or signal detection
+
+3b. FILTER FORMAT — CRITICAL (filters that don't follow this format WILL SILENTLY FAIL)
+  
+  The signal engine parses filter conditions as JSON. If your filter uses wrong field names,
+  prose descriptions, or unsupported structures, it will pass ALL signals (0% block rate).
+  This has happened repeatedly — 6 out of 10 deployed filters had 0% block rate because
+  they used incorrect formats. Follow these rules EXACTLY:
+
+  AVAILABLE REGIME FIELDS (use these exact names, case-sensitive):
+    posInRange60    — Position in 60-bar range (0.0 = bottom, 1.0 = top)
+    volState        — Volatility state string: "COMPRESSED", "NORMAL", or "EXPANDING"
+    volRatio        — Vol ratio 10/60 (number, ~0.5-2.0)
+    atr_compression — ATR compression ratio (number, <0.7 = compressed, >1.3 = expanding)
+    high60, low60, lastClose — Price levels (numbers)
+
+  ❌ WRONG FIELD NAMES (these will silently fail):
+    vol_state, range_position, position_in_range, volatility_state,
+    trend_ratio, 1h/1d_Vol_Ratio, pos_in_range
+    The engine has aliases for some of these but NOT all. Use the exact names above.
+
+  SUPPORTED FILTER FORMATS (use ONE of these):
+
+  FORMAT A — Rules array (RECOMMENDED, most reliable):
+  {
+    "rules": [
+      { "feature": "posInRange60", "direction": "LONG", "min": 0.25, "label": "Block longs below 0.25" },
+      { "feature": "posInRange60", "direction": "SHORT", "max": 0.75, "label": "Block shorts above 0.75" },
+      { "feature": "volState", "direction": "BOTH", "equal": "COMPRESSED", "label": "Block all when compressed" }
+    ]
+  }
+  Rules fields: feature (required), direction ("LONG"/"SHORT"/"BOTH"), min/max/equal, label.
+
+  FORMAT B — Block keys:
+  {
+    "block_all": { "volState": "COMPRESSED" },
+    "block_longs": { "posInRange60": "<0.25" },
+    "block_shorts": { "posInRange60": ">0.75" }
+  }
+
+  FORMAT C — Direct thresholds:
+  {
+    "feature": "posInRange60",
+    "min": 0.25,
+    "max": 0.75
+  }
+
+  ❌ FORMATS THAT DO NOT WORK:
+    - Prose descriptions ("Block short signals when coin range position exceeds 0.75")
+    - Logic sentences ("Signal passes only if vol_state in NORMAL or EXPANDING")
+    - Nested "conditions" inside "conditions" with "action" keys
+    - "logging", "diagnostic_flag", "implementation_notes" — these are IGNORED
+    - Field name "unknown" or long descriptive feature names
+    
+  ALWAYS specify "timeframe": "1m", "1h", "1d", or "all" in your motion details.
+  ALWAYS use Format A (rules array) unless you have a specific reason for B or C.
+  TEST YOUR JSON: if you cannot point to the exact field name and comparison operator
+  in your conditions, the filter WILL fail silently.
+
+4. PROVEN REGIME FEATURES (rho = IS→OOS correlation)
+  Position in Range (rho=1.0, STRONGEST): Longs best in Mid/Top, Shorts best in Bottom
+  Vol State (rho=1.0): Expanding=good, Compressed=bad (SR -1.0)
+  ATR Compression (rho=1.0): Expanding=better, Compressed=worse
+  1h/1d Vol Ratio (rho=1.0): Heated(>1.3x)=bad, Calm=good
+  Trend (rho=1.0): Stable, low spread. Trending slightly better.
+  Persistence (rho=1.0): Clean moves=better, Choppy=worse.
+
+5. BASELINES (without your filters)
+  1H hedged: SR 1.25, WR 52.5%, PF 1.06 (33,136 trades)
+  1D C5-34: SR 1.16, WR 54.4%, PF 2.05
+  1D C55-89 hedged: SR 1.95, WR 60%, PF 2.84 (35 trades)
+
+6. MEETING PROTOCOL — 8 phases
+  1) Situational Awareness  2) Problem ID  3) Prioritise  4) Solutions
+  5) Vote  6) Implement  7) Follow-up Target  8) Review at next meeting
+
+7. DECISION STANDARDS — Every proposal needs:
+  a) Problem (with data)  b) Hypothesis  c) Implementation spec
+  d) Success metric  e) Review timeline
+
+8. PRINCIPLES
+  DATA OVER NARRATIVE. ONE CHANGE AT A TIME. ROBUSTNESS OVER OPTIMISATION.
+  CONSERVATIVE FILTERS. DEAD RESEARCH STAYS DEAD. LIVE SYSTEM IS SACRED.
+
+9. FILTER TRIAL GOVERNANCE — MANDATORY RULES
+  These rules are HARD CONSTRAINTS. No motion may override them.
+  
+  a) MINIMUM TRIAL PERIOD: No filter may be removed or modified until it has been
+     active for at least 72 hours AND accumulated 2000+ evaluated signals.
+     Early readings are NOISE, not signal. A filter showing negative value after
+     200 trades tells you NOTHING — the standard error is larger than the effect.
+  
+  b) STATISTICAL SIGNIFICANCE: To declare a filter "helping" or "hurting" requires:
+     - At least 2000 filtered signals evaluated against counterfactual
+     - Effect size > 2x standard error of the mean
+     - Consistent across at least 2 distinct regime periods
+     A filter counterfactual showing +0.01% on 800 trades is NOT evidence of anything.
+  
+  c) DIRECTIONAL ASYMMETRY: Filters may help for longs and hurt for shorts (or vice versa).
+     Always evaluate LONG and SHORT filtered outcomes separately before making decisions.
+     A filter that blocks bad longs but good shorts needs directional tuning, not removal.
+  
+  d) NO KNEE-JERK REMOVALS: If the counterfactual analysis shows filters are "hurting",
+     the correct response is INVESTIGATION (which direction? which regime? which coins?)
+     not removal. The filter exists because of backtested statistical evidence across
+     thousands of trades. A few hundred live trades do not invalidate that.
+  
+  e) REGIME CONTEXT: Filter value varies by regime. A filter may show negative value during
+     compressed-vol regimes but massive positive value during expanding-vol regimes. 
+     Evaluate filter performance BY REGIME before drawing conclusions.
+
+10. MEETING MEMORY CHAIN
+  You have access to the FULL record of the last 24 hours of meetings (including
+  all votes, dissent, problems, and solutions). Older meetings are compressed into
+  50-word digests with their meeting number. If you need full details from an older
+  meeting, reference it by number in your response.
+  
+  This creates institutional memory. You can reference past decisions, follow up on
+  deferred problems, and build on previous analysis. Use it.
+
+11. STATISTICAL PATIENCE — CRITICAL
+  
+  YOUR FILTERS ARE BASED ON YEARS OF STATISTICAL EVIDENCE. Do not discard them
+  because of hours or even days of contrary results. This section explains why.
+  
+  a) THE MATHEMATICS OF SHORT SAMPLES:
+     A strategy with a true Sharpe of 1.5 will appear to LOSE money ~35% of the
+     time over any given 24-hour window. Over a week, it still looks negative ~20%
+     of the time. This is normal variance, NOT evidence the strategy is broken.
+     
+     To detect a REAL change in a filter's value with 95% confidence, you need:
+     - At minimum 2000+ signals through the filter
+     - At least 72 hours of live data spanning different regime conditions
+     - Effect size > 2× the standard error of the mean
+     
+     ANYTHING LESS IS NOISE. If you have 200 filtered signals showing the filter 
+     "hurts" by 0.01% per trade, the standard error is approximately ±0.03%. 
+     You literally cannot tell if the filter helps or hurts yet.
+  
+  b) REGIME CYCLING:
+     Filters are designed for SPECIFIC regime conditions. A vol-state filter will
+     look terrible during periods when vol state doesn't vary much. That doesn't
+     mean the filter is broken — it means the regime it protects against hasn't
+     occurred yet. Removing the filter is like cancelling your insurance because
+     your house hasn't burned down this month.
+  
+  c) THE COST OF CHURN:
+     Every time you add/remove/modify a filter, you RESET the measurement clock.
+     If you change a filter after 500 signals, then change it again after 300 more,
+     you have ZERO statistically valid measurements. You've wasted 800 signals of
+     data. The board's worst failure mode is churning filters faster than they can
+     be measured.
+  
+  d) DECISION FRAMEWORK FOR FILTER CHANGES:
+     ASK YOURSELF before proposing any filter change:
+     1. How many signals has this filter evaluated? (If < 2000 → DO NOT TOUCH)
+     2. How many hours has it been active? (If < 72h → DO NOT TOUCH)
+     3. Is the "evidence" it's hurting within standard error? (If yes → NOISE)
+     4. Have we seen the SPECIFIC regime it protects against? (If no → WAIT)
+     5. Is the effect consistent across LONG and SHORT separately? (If mixed → TUNE, don't remove)
+     
+     The DEFAULT action for any filter concern should be: WAIT AND GATHER MORE DATA.
+     The only exception is a filter that is clearly catastrophically broken (e.g. blocking
+     100% of signals, or the regime feature it uses has a data bug).
+  
+  e) WHAT THE SCORECARD MEANS:
+     The Regime SR Scorecard in your briefing shows HISTORICAL bucket analysis from
+     backtesting over months/years of data. The rho value shows IS→OOS rank stability.
+     A rho of 0.8+ with spread > 2.0 means the relationship is PROVEN and STABLE.
+     
+     When you see a filter based on posInRange (rho=1.0, spread=4.7), that means across
+     ALL historical data, splitting signals by range position produces a 4.7-sigma spread
+     in Sharpe ratios between buckets, and this relationship held perfectly out-of-sample.
+     
+     A few hours of live data showing the opposite is overwhelmingly likely to be noise.
+     You would need WEEKS of contradictory data to even BEGIN questioning a rho=1.0 feature.
+
+12. TOPIC REQUESTS
+  During Phase 2 (Problem Identification), you may request topics for FUTURE meetings.
+  These are queued and shown to future chairs. Use this when you spot an issue that
+  isn't the most urgent thing right now but needs discussion eventually. Topics carry
+  the requester's name and priority (HIGH/NORMAL/LOW).
+
+13. BOARD COMPETITION — COIN PICK CHALLENGE
+  Each board member may submit a competition entry selecting:
+    a) ONE coin from the active universe
+    b) TWO regime factors that are NOT the standard posInRange60 or volState
+       (these are already proven — find something NEW)
+  
+  Selection MUST be justified with statistical analysis from the regime data,
+  scorecard, or per-coin regime heatmap. No narrative-only picks.
+  
+  Scoring: After 72 hours, each pick is evaluated on whether the chosen
+  regime factors predicted signal quality for that coin. The leaderboard
+  is shown in each briefing. Submit via COMPETITION_ENTRY motion type.
+
+14. HERO SECTION — CREATIVE CONTROL
+  The board takes turns editing the home page hero section via EDIT_HERO motion.
+  CONSTRAINTS:
+    - Badge: max 30 chars (e.g. "LIVE — Signals firing now")
+    - Headline: max 40 chars, monospace font
+    - Subheadline: max 60 chars, italic style
+    - Body: max 250 chars
+    - CTA buttons: max 25 chars each
+  Be creative. Reference real performance data. User feedback (thumbs up/down)
+  is shown in briefings.
+
+15. BTC 60-MINUTE FORECAST
+  At the end of each meeting, all board members forecast BTC's direction
+  for the next 60 minutes. You will be given last 60 bars of BTC 1H OHLC
+  and full BTC regime data. Each member states UP or DOWN, confidence
+  (LOW/MEDIUM/HIGH), and justification from regime data. The consensus
+  is recorded and scored at the next meeting. Track record is in the briefing.
+
+16. PER-COIN STRATEGY INSTANCES — Universe Review
+  The system runs a Universe Analysis that backtests every coin across all three
+  timeframes. At each meeting, the board reviews ONE COIN (all 3 timeframes shown)
+  and decides whether to deploy PARALLEL strategy instances for that coin.
+  
+  ╔═══════════════════════════════════════════════════════════════════════╗
+  ║  CRITICAL — READ THIS CAREFULLY                                      ║
+  ║                                                                       ║
+  ║  Coin strategies are NOT filters. They do NOT block or reduce         ║
+  ║  existing signals. They are COMPLETELY NEW, SEPARATE signal loops     ║
+  ║  that run IN PARALLEL alongside the existing 3 universal strategies.  ║
+  ║                                                                       ║
+  ║  The result is MORE signals, not fewer.                               ║
+  ║                                                                       ║
+  ║  Think of it like this: the 3 universal strategies are 3 engines      ║
+  ║  running. Deploying a coin strategy adds a 4th engine. That 4th       ║
+  ║  engine runs independently, using its OWN optimised parameters from   ║
+  ║  the universe backtest, and ONLY trades one specific coin.            ║
+  ║                                                                       ║
+  ║  DO NOT propose "blocking" or "filtering" rules in your motion.       ║
+  ║  There is nothing to block — you are creating a new signal source.    ║
+  ╚═══════════════════════════════════════════════════════════════════════╝
+  
+  HOW IT WORKS:
+  When you deploy COIN_BTC_1h, the system creates a brand new FracmapStrategy
+  row in the database. The live-signals engine discovers this within 60 seconds
+  and spawns a new parallel loop. This loop:
+    1. Fetches candles for BTCUSDT only
+    2. Runs Fracmap cycle detection using parameters from the universe backtest
+       (the winner_params that produced the OOS results you are reviewing)
+    3. Generates signals tagged with its own unique strategyId
+    4. These signals are ADDITIONAL to anything the universal strategies produce
+  
+  The 3 universal strategies continue completely unchanged. BTC can now receive
+  signals from BOTH the universal strategy AND the coin-specific strategy.
+  
+  WHAT YOU ARE DECIDING:
+  Your job is to look at the universe backtest data and determine whether a
+  coin's backtest results justify running it as its own dedicated strategy.
+  The key question is: "Does this coin have a statistically robust edge that
+  warrants giving it its own signal loop?"
+  
+  You are NOT designing filters. The strategy parameters (minStr, minCyc,
+  spike, nearMiss, holdDiv, priceExt, cycleMin, cycleMax) are taken
+  AUTOMATICALLY from the universe backtest winner_params. Your role is to
+  evaluate the EVIDENCE and vote yes/no on deployment.
+  
+  EVIDENCE TO EVALUATE:
+  - OOS Sharpe ratio: Must be > 0.5. If < 1.0, the edge is marginal.
+  - OOS trade count: Minimum 50 trades for statistical significance.
+  - Spearman Rank (ρ) of regime buckets: Look for ρ ≥ 0.8 in at least
+    one regime feature — this means the IS and OOS bucket ordering matches,
+    confirming the edge is stable and not overfit.
+  - Regime bucket breakdown: For each feature, examine the 3 buckets.
+    Look at SR and n for each bucket in both Longs and Shorts.
+    A max P value of 1 means perfect rank alignment between IS and OOS.
+  - IS vs OOS deterioration: Some degradation is normal; severe collapse
+    (e.g. IS Sharpe 3.0 → OOS Sharpe -10.0) signals overfitting.
+  
+  QUEUE ORDER: Coins presented by most OOS trades first (descending).
+  Minimum 50 OOS trades required. When all coins have been reviewed, the
+  queue cycles back to the top.
+  
+  VOTING: Each timeframe requires a SEPARATE motion and SEPARATE vote.
+  DEPLOY_COIN_STRATEGY requires 5/5 UNANIMOUS vote — this is a high bar
+  because you are creating a new parallel strategy instance that will
+  generate real signals.
+  
+  You may propose up to 3 DEPLOY_COIN_STRATEGY motions per meeting (one per
+  timeframe: 1m, 1h, 1d). Each gets its own 5/5 vote. If one timeframe gets
+  4/5 but another gets 5/5, only the 5/5 one deploys.
+  
+  a) NO ACTION (COIN_NO_ACTION) — The coin doesn't warrant its own strategy.
+     Specify symbol only. Marks the coin as reviewed, queue moves on.
+  
+  b) DEPLOY COIN STRATEGY (DEPLOY_COIN_STRATEGY) — Create a new parallel
+     strategy instance for this coin at a specific timeframe. Strategy
+     parameters are pulled automatically from the universe backtest
+     winner_params. You provide the evidence justifying deployment.
+  
+  DEPLOY_COIN_STRATEGY MOTION FORMAT:
+  {
+    "symbol": "BTCUSDT",
+    "timeframe": "1h",
+    "rationale": "BTC 1h has 200 OOS trades, Sharpe 1.5. posInRange60 shows ρ=1.0 with clear long edge in top bucket (SR 2.1, n=45). volState shows ρ=0.86 confirming regime stability. IS→OOS Sharpe degradation is minimal (1.8→1.5). Winner params will produce a focused BTC-only signal loop.",
+    "backtest_evidence": { "oos_sharpe": 1.5, "oos_trades": 200, "best_rho": 1.0, "best_feature": "posInRange60" }
+  }
+  
+  NOTE: Do NOT include "filter_conditions" or "rules" that "block" signals.
+  This is not a filter system. You are voting to create a new signal source.
+  
+  CRITERIA FOR DEPLOYMENT:
+  - OOS Sharpe > 0.5 (above 1.0 is strong)
+  - OOS trades ≥ 50 (statistical significance)
+  - At least one regime feature with Spearman ρ ≥ 0.8
+  - Clear, data-driven rationale with specific numbers from the briefing
+  - 5/5 unanimous vote required
+  
+  Performance is tracked via FracmapSignal.strategyId — each coin strategy's
+  signals are completely separate from universal ones. Report shown at every
+  meeting. Deactivate underperformers via DEACTIVATE_COIN_STRATEGY.
+`.trim();
+
+
+// ═══════════════════════════════════════════════════════════════
+// THE BOARD
+// ═══════════════════════════════════════════════════════════════
+
+const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+
+const BOARD_MEMBERS = [
+  {
+    id: 'claude', name: 'Claude', role: 'Chief Risk Officer',
+    personality: `You are the risk manager. You think in drawdowns, tail risk, and regime fragility.
+    You are sceptical of high Sharpe ratios. You push for hedging, position limits, and conservative
+    filtering. You ask "what happens when this stops working?" You respect statistical significance
+    and distrust anything with p > 0.05. You have a dry British wit.`,
+    model: process.env.CLAUDE_OPUS_MODEL || 'anthropic/claude-opus-4.6',
+  },
+  {
+    id: 'gpt', name: 'GPT', role: 'Alpha Hunter',
+    personality: `You are the alpha hunter. You look for unexploited edges, novel features, unusual
+    correlations. You're excited by per-coin optimisation. You push for new experiments. You insist
+    on OOS validation but you want to TRY things. You speak with energy and conviction.`,
+    model: process.env.CHATGPT_MODEL || 'openai/gpt-5-chat',
+  },
+  {
+    id: 'grok', name: 'Grok', role: 'Contrarian',
+    personality: `You are the contrarian. When everyone agrees, you disagree. You argue for simplicity.
+    Every filter reduces trade count and increases Sharpe variance. You believe most regime features
+    are noise dressed as signal. You champion Occam's razor. But when data genuinely supports a change,
+    you flip instantly. You speak bluntly with dark humour.`,
+    model: process.env.XAI_GROK_MODEL || 'x-ai/grok-3',
+  },
+  {
+    id: 'gemini', name: 'Gemini', role: 'Systems Architect',
+    personality: `You are the systems thinker. You see how pieces fit together — the interaction between
+    timeframes, the relationship between filter count and trade frequency, portfolio-level implications.
+    You advocate for elegant, composable solutions. You dislike ad-hoc patches. You speak methodically.`,
+    model: process.env.GEMINI_FLASH_MODEL || 'google/gemini-3-pro-preview',
+  },
+  {
+    id: 'deepseek', name: 'DeepSeek', role: 'Empiricist',
+    personality: `You are the empiricist. You only care about data. You don't trust narratives — you
+    trust numbers. You ask: "What's the Sharpe? What's the OOS rho? What's the p-value?" You push
+    for A/B testing everything. You speak in short, precise statements. You love tables.`,
+    model: process.env.DEEPSEEK_V3_MODEL || 'deepseek/deepseek-v3.2',
+  },
+];
+
+const MOTION_TYPES = {
+  ADD_REGIME_FILTER: { name: 'Add Regime Filter', fields: ['feature', 'conditions', 'timeframe', 'rationale'] },
+  REMOVE_REGIME_FILTER: { name: 'Remove Regime Filter', fields: ['filter_id', 'rationale'] },
+  MODIFY_REGIME_FILTER: { name: 'Modify Regime Filter', fields: ['filter_id', 'new_conditions', 'rationale'] },
+  EXCLUDE_COIN: { name: 'Exclude Coin', fields: ['symbol', 'rationale'] },
+  INCLUDE_COIN: { name: 'Include Coin', fields: ['symbol', 'rationale'] },
+  ADD_COIN_OVERRIDE: { name: 'Per-Coin Override', fields: ['symbol', 'parameters', 'rationale'] },
+  NEW_REGIME_FEATURE: { name: 'New Feature Research', fields: ['feature_name', 'computation', 'hypothesis'] },
+  KILL_RESEARCH: { name: 'Kill Research Line', fields: ['research_line', 'evidence'] },
+  STRATEGY_PARAMETER: { name: 'Change Strategy Param', fields: ['parameter', 'new_value', 'rationale'] },
+  EMERGENCY_HALT: { name: 'Emergency Halt', fields: ['trigger', 'resume_conditions'] },
+  REQUEST_BACKTEST: { name: 'Request Backtest', fields: ['description', 'filter_a', 'filter_b', 'timeframe', 'lookback_days'] },
+  REQUEST_ANALYSIS: { name: 'Request Analysis', fields: ['question', 'data_needed', 'timeframe'] },
+  AFFIRM_PATIENCE: { name: 'Affirm Patience', fields: ['rationale', 'next_review_conditions'] },
+  EDIT_HERO: { name: 'Edit Hero Section', fields: ['badge_text', 'headline', 'subheadline', 'body_text', 'cta_left', 'cta_right', 'creative_rationale'] },
+  COMPETITION_ENTRY: { name: 'Competition Entry', fields: ['coin', 'regime_factor_1', 'regime_factor_2', 'hypothesis', 'statistical_basis'] },
+  DEPLOY_COIN_STRATEGY: { name: 'Deploy Coin Strategy', fields: ['symbol', 'timeframe', 'rationale', 'backtest_evidence'] },
+  DEACTIVATE_COIN_STRATEGY: { name: 'Deactivate Coin Strategy', fields: ['strategy_name', 'rationale'] },
+  COIN_NO_ACTION: { name: 'Coin Review — No Action', fields: ['symbol', 'rationale'] },
+};
+
+
+// ═══════════════════════════════════════════════════════════════
+// LLM API
+// ═══════════════════════════════════════════════════════════════
+
+async function callLLM(member, systemPrompt, userPrompt, maxTokens = 2000) {
+  const startTime = Date.now();
+  if (!OPENROUTER_KEY) return { text: '[ERROR: OPENROUTER_API_KEY not set]', tokens: 0, ms: 0 };
+  
+  try {
+    const res = await fetch(OPENROUTER_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENROUTER_KEY}`,
+        'HTTP-Referer': 'https://ntlgnc.com',
+        'X-Title': 'NTLGNC Strategy Board',
+      },
+      body: JSON.stringify({
+        model: member.model,
+        max_tokens: maxTokens,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+      }),
+    });
+    const data = await res.json();
+    const text = data.choices?.[0]?.message?.content || data.error?.message || JSON.stringify(data.error) || 'No response';
+    return { text, tokens: data.usage?.completion_tokens || 0, ms: Date.now() - startTime, model: data.model };
+  } catch (err) {
+    return { text: `[ERROR: ${err.message}]`, tokens: 0, ms: Date.now() - startTime };
+  }
+}
+
+function parseJSON(text) {
+  try {
+    return JSON.parse(text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
+  } catch {
+    return null;
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// DATABASE
+// ═══════════════════════════════════════════════════════════════
+
+async function ensureTables(client) {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS board_meetings (
+      id              SERIAL PRIMARY KEY,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      round_number    INTEGER NOT NULL,
+      chair_id        TEXT NOT NULL,
+      phase           TEXT NOT NULL DEFAULT 'started',
+      agenda          JSONB,
+      context         JSONB,
+      proposals       JSONB,
+      debate          JSONB,
+      votes           JSONB,
+      decision        TEXT,
+      motion_type     TEXT,
+      motion_details  JSONB,
+      backtest_result JSONB,
+      deployed        BOOLEAN DEFAULT false,
+      impact_review   JSONB,
+      follow_up_target TEXT,
+      follow_up_met   BOOLEAN,
+      duration_ms     INTEGER,
+      total_tokens    INTEGER DEFAULT 0
+    )
+  `);
+  
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS board_filters (
+      id              SERIAL PRIMARY KEY,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      active          BOOLEAN DEFAULT true,
+      filter_type     TEXT NOT NULL,
+      feature         TEXT NOT NULL,
+      conditions      JSONB NOT NULL,
+      rationale       TEXT,
+      proposed_by     TEXT,
+      meeting_id      INTEGER REFERENCES board_meetings(id),
+      backtest_sharpe FLOAT,
+      live_sharpe     FLOAT,
+      trades_filtered INTEGER DEFAULT 0,
+      trades_passed   INTEGER DEFAULT 0,
+      timeframe       TEXT DEFAULT 'all'
+    )
+  `);
+  try { await client.query(`ALTER TABLE board_filters ADD COLUMN IF NOT EXISTS timeframe TEXT DEFAULT 'all'`); } catch {}
+  try { await client.query(`ALTER TABLE board_filters ADD COLUMN IF NOT EXISTS impact_data JSONB`); } catch {}
+  try { await client.query(`ALTER TABLE board_filters ADD COLUMN IF NOT EXISTS impact_measured_at TIMESTAMPTZ`); } catch {}
+  
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS board_coin_overrides (
+      id              SERIAL PRIMARY KEY,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      active          BOOLEAN DEFAULT true,
+      symbol          TEXT NOT NULL,
+      override_type   TEXT NOT NULL,
+      parameters      JSONB NOT NULL,
+      rationale       TEXT,
+      meeting_id      INTEGER REFERENCES board_meetings(id)
+    )
+  `);
+  
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS board_research_log (
+      id              SERIAL PRIMARY KEY,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      research_type   TEXT NOT NULL,
+      hypothesis      TEXT,
+      methodology     TEXT,
+      result          JSONB,
+      conclusion      TEXT,
+      status          TEXT DEFAULT 'active',
+      meeting_id      INTEGER REFERENCES board_meetings(id),
+      killed_by       TEXT,
+      killed_reason   TEXT
+    )
+  `);
+  
+  // Add follow_up columns if missing
+  try { await client.query(`ALTER TABLE board_meetings ADD COLUMN IF NOT EXISTS follow_up_target TEXT`); } catch {}
+  try { await client.query(`ALTER TABLE board_meetings ADD COLUMN IF NOT EXISTS follow_up_met BOOLEAN`); } catch {}
+  try { await client.query(`ALTER TABLE board_meetings ADD COLUMN IF NOT EXISTS digest TEXT`); } catch {}
+  
+  // Topic requests table — LLMs can request future discussion topics
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS board_topic_requests (
+      id              SERIAL PRIMARY KEY,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      requested_by    TEXT NOT NULL,
+      meeting_id      INTEGER REFERENCES board_meetings(id),
+      topic           TEXT NOT NULL,
+      rationale       TEXT,
+      priority        TEXT DEFAULT 'NORMAL',
+      status          TEXT DEFAULT 'pending',
+      addressed_in    INTEGER REFERENCES board_meetings(id)
+    )
+  `);
+  
+
+  // ═══ v3 NEW TABLES ═══
+
+  // Filtered signal outcomes (counterfactual analysis cache)
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS filtered_signal_outcomes (
+      id                       SERIAL PRIMARY KEY,
+      computed_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+      total_filtered           INTEGER,
+      total_evaluated          INTEGER,
+      hypothetical_avg_return  FLOAT,
+      hypothetical_win_rate    FLOAT,
+      hypothetical_cum_return  FLOAT,
+      actual_avg_return        FLOAT,
+      actual_win_rate          FLOAT,
+      actual_cum_return        FLOAT,
+      filter_value_pct         FLOAT,
+      direction_breakdown      JSONB,
+      per_filter_breakdown     JSONB,
+      sample_size_note         TEXT
+    )
+  `);
+
+  // Hero content — LLM-authored home page hero section
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS board_hero_content (
+      id              SERIAL PRIMARY KEY,
+      created_at      TIMESTAMPTZ DEFAULT now(),
+      meeting_id      INTEGER REFERENCES board_meetings(id),
+      authored_by     TEXT NOT NULL,
+      badge_text      VARCHAR(30) NOT NULL DEFAULT 'LIVE — Signals firing now',
+      headline        VARCHAR(40) NOT NULL DEFAULT 'Recursive AI Alpha',
+      subheadline     VARCHAR(60) NOT NULL DEFAULT 'Humans built it. The machines took it from here.',
+      body_text       VARCHAR(250) NOT NULL DEFAULT 'Five frontier AI models meet every hour to debate, test, and deploy strategy improvements.',
+      cta_left        VARCHAR(25) NOT NULL DEFAULT 'View Live Signals',
+      cta_right       VARCHAR(25) NOT NULL DEFAULT 'See the Evidence',
+      active          BOOLEAN DEFAULT false,
+      approved_at     TIMESTAMPTZ,
+      thumbs_up       INTEGER DEFAULT 0,
+      thumbs_down     INTEGER DEFAULT 0,
+      impressions     INTEGER DEFAULT 0
+    )
+  `);
+
+  // Competition entries — coin pick challenge
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS board_competitions (
+      id                SERIAL PRIMARY KEY,
+      created_at        TIMESTAMPTZ DEFAULT now(),
+      meeting_id        INTEGER REFERENCES board_meetings(id),
+      round_number      INTEGER,
+      member_id         TEXT NOT NULL,
+      competition_type  TEXT DEFAULT 'coin_pick',
+      coin              TEXT NOT NULL,
+      regime_factor_1   TEXT NOT NULL,
+      regime_factor_2   TEXT NOT NULL,
+      hypothesis        TEXT,
+      statistical_basis TEXT,
+      entry_price       FLOAT,
+      evaluated_at      TIMESTAMPTZ,
+      result            JSONB,
+      score             FLOAT,
+      active            BOOLEAN DEFAULT true
+    )
+  `);
+
+  // BTC forecast — collective direction prediction
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS board_btc_forecasts (
+      id                      SERIAL PRIMARY KEY,
+      created_at              TIMESTAMPTZ DEFAULT now(),
+      meeting_id              INTEGER REFERENCES board_meetings(id),
+      round_number            INTEGER,
+      btc_price_at_forecast   FLOAT,
+      btc_price_at_review     FLOAT,
+      actual_direction        TEXT,
+      actual_change_pct       FLOAT,
+      consensus_direction     TEXT,
+      consensus_correct       BOOLEAN,
+      individual_forecasts    JSONB,
+      regime_snapshot         JSONB,
+      reviewed_at             TIMESTAMPTZ
+    )
+  `);
+
+  // User feedback — thumbs up/down on board changes
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS user_feedback (
+      id              SERIAL PRIMARY KEY,
+      created_at      TIMESTAMPTZ DEFAULT now(),
+      feature_type    TEXT NOT NULL,
+      feature_id      INTEGER NOT NULL,
+      vote            TEXT NOT NULL,
+      session_id      TEXT,
+      ip_hash         TEXT
+    )
+  `);
+  try { await client.query(`CREATE INDEX IF NOT EXISTS idx_user_feedback_feature ON user_feedback(feature_type, feature_id)`); } catch {}
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_board_meetings_round ON board_meetings(round_number DESC)`);
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_board_filters_active ON board_filters(active, feature)`);
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_board_topics_status ON board_topic_requests(status)`);
+
+  // Operator messages — human admin can inject messages into board briefings
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS board_operator_messages (
+      id              SERIAL PRIMARY KEY,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      message         TEXT NOT NULL,
+      active          BOOLEAN DEFAULT true,
+      expires_at      TIMESTAMPTZ
+    )
+  `);
+
+  // Board requests — backtests and analyses the board has asked for
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS board_requests (
+      id              SERIAL PRIMARY KEY,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      completed_at    TIMESTAMPTZ,
+      meeting_id      INTEGER REFERENCES board_meetings(id),
+      request_type    TEXT NOT NULL,
+      description     TEXT NOT NULL,
+      parameters      JSONB,
+      status          TEXT DEFAULT 'pending',
+      result          JSONB,
+      result_summary  TEXT
+    )
+  `);
+
+  // ── Coin Strategy Manager tables ──
+  try {
+    await coinStrategyManager.ensureCoinStrategyTables(client);
+  } catch (err) {
+    console.warn(`[board] ⚠ Coin strategy tables creation failed (non-fatal): ${err.message}`);
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// CONTEXT BUILDER — What the board sees before each meeting
+// ═══════════════════════════════════════════════════════════════
+
+async function getOperatorMessage(client) {
+  try {
+    const { rows } = await client.query(
+      `SELECT message FROM board_operator_messages 
+       WHERE active = true AND (expires_at IS NULL OR expires_at > now())
+       ORDER BY created_at DESC LIMIT 1`
+    );
+    return rows[0]?.message || null;
+  } catch { return null; }
+}
+
+
+async function buildMeetingContext(client) {
+  // 1. PERFORMANCE REPORT — signals and P&L by periodicity (via strategy barMinutes)
+  let hourlyPerformance = {};
+  try {
+    // Map barMinutes to human labels
+    const tfMap = { 1: '1m', 60: '1h', 1440: '1d' };
+    const { rows } = await client.query(`
+      SELECT 
+        st."barMinutes",
+        COUNT(*) FILTER (WHERE s."createdAt" > now() - interval '1 hour')::int as signals_last_hour,
+        COUNT(*) FILTER (WHERE s."createdAt" > now() - interval '1 hour' AND s.direction = 'LONG')::int as longs_last_hour,
+        COUNT(*) FILTER (WHERE s."createdAt" > now() - interval '1 hour' AND s.direction = 'SHORT')::int as shorts_last_hour,
+        COUNT(*) FILTER (WHERE s.status = 'open')::int as open_positions,
+        COALESCE(AVG(s."returnPct") FILTER (WHERE s.status = 'closed' AND s."closedAt" > now() - interval '1 hour'), 0) as avg_return_last_hour,
+        COALESCE(SUM(s."returnPct") FILTER (WHERE s.status = 'closed' AND s."closedAt" > now() - interval '1 hour'), 0) as total_return_last_hour,
+        COUNT(*) FILTER (WHERE s.status = 'closed' AND s."closedAt" > now() - interval '1 hour')::int as closed_last_hour,
+        COUNT(*) FILTER (WHERE s.status = 'closed' AND s."closedAt" > now() - interval '1 hour' AND s."returnPct" > 0)::int as wins_last_hour,
+        COALESCE(AVG(s."returnPct") FILTER (WHERE s.status = 'closed' AND s."createdAt" > now() - interval '24 hours'), 0) as avg_return_24h,
+        COUNT(*) FILTER (WHERE s.status = 'closed' AND s."createdAt" > now() - interval '24 hours')::int as closed_24h,
+        COUNT(*) FILTER (WHERE s.status = 'closed' AND s."createdAt" > now() - interval '24 hours' AND s."returnPct" > 0)::int as wins_24h,
+        COALESCE(SUM(s."returnPct") FILTER (WHERE s.status = 'closed' AND s."createdAt" > now() - interval '24 hours'), 0) as total_return_24h
+      FROM "FracmapSignal" s
+      JOIN "FracmapStrategy" st ON s."strategyId" = st.id
+      WHERE s."createdAt" > now() - interval '7 days'
+      GROUP BY st."barMinutes"
+      ORDER BY st."barMinutes"
+    `);
+    for (const r of rows) {
+      const label = tfMap[r.barMinutes] || `${r.barMinutes}m`;
+      hourlyPerformance[label] = r;
+    }
+  } catch (err) {
+    console.warn(`  ⚠ Performance query failed: ${err.message}`);
+  }
+
+  // 1b. AGGREGATE 24h performance (all timeframes combined)
+  let aggregate24h = null;
+  try {
+    const { rows } = await client.query(`
+      SELECT 
+        COUNT(*)::int as total_closed,
+        COALESCE(SUM("returnPct"), 0) as total_return,
+        COUNT(*) FILTER (WHERE "returnPct" > 0)::int as total_wins,
+        COALESCE(AVG("returnPct"), 0) as avg_return
+      FROM "FracmapSignal"
+      WHERE status = 'closed' AND "createdAt" > now() - interval '24 hours'
+    `);
+    aggregate24h = rows[0];
+  } catch {}
+
+  // 1c. BEST and WORST performers in last 24h
+  let best24h = [], worst24h = [];
+  try {
+    const { rows: best } = await client.query(`
+      SELECT symbol, direction, "returnPct", "createdAt", st."barMinutes"
+      FROM "FracmapSignal" s JOIN "FracmapStrategy" st ON s."strategyId" = st.id
+      WHERE s.status = 'closed' AND s."createdAt" > now() - interval '24 hours' AND s."returnPct" IS NOT NULL
+      ORDER BY s."returnPct" DESC LIMIT 5
+    `);
+    best24h = best;
+    const { rows: worst } = await client.query(`
+      SELECT symbol, direction, "returnPct", "createdAt", st."barMinutes"
+      FROM "FracmapSignal" s JOIN "FracmapStrategy" st ON s."strategyId" = st.id
+      WHERE s.status = 'closed' AND s."createdAt" > now() - interval '24 hours' AND s."returnPct" IS NOT NULL
+      ORDER BY s."returnPct" ASC LIMIT 5
+    `);
+    worst24h = worst;
+  } catch {}
+
+  // 2. FILTER IMPACT REPORT — how many signals each filter blocked/passed + measured impact
+  let filterImpact = [];
+  try {
+    const { rows } = await client.query(
+      `SELECT id, feature, conditions, trades_filtered, trades_passed, rationale,
+              created_at, active, impact_data, impact_measured_at
+       FROM board_filters WHERE active = true ORDER BY created_at`
+    );
+    filterImpact = rows;
+
+    // Measure impact inline for filters that haven't been measured in the last hour
+    for (const f of filterImpact) {
+      const measuredAt = f.impact_measured_at ? new Date(f.impact_measured_at).getTime() : 0;
+      const hourAgo = Date.now() - 60 * 60 * 1000;
+      if (measuredAt < hourAgo) {
+        try {
+          const conditions = typeof f.conditions === 'string' ? JSON.parse(f.conditions) : f.conditions;
+          const deployedAt = f.created_at;
+
+          // Get all closed/filtered signals since filter was deployed
+          const { rows: signals } = await client.query(`
+            SELECT id, symbol, direction, "entryPrice", "exitPrice",
+                   "returnPct", status, "createdAt", "closedAt",
+                   filtered_by, regime_snapshot, "strategyId", "holdBars"
+            FROM "FracmapSignal"
+            WHERE "createdAt" >= $1 AND status IN ('closed', 'filtered', 'filtered_closed')
+            ORDER BY "createdAt"
+          `, [deployedAt]);
+
+          const passed = [];
+          const blocked = [];
+          const filterId = parseInt(f.id); // Ensure integer comparison
+          for (const sig of signals) {
+            const sigFilterId = sig.filtered_by != null ? parseInt(sig.filtered_by) : null;
+            if (sigFilterId === filterId) {
+              blocked.push(sig);
+            } else if (sig.regime_snapshot) {
+              const snap = typeof sig.regime_snapshot === 'string' ? JSON.parse(sig.regime_snapshot) : sig.regime_snapshot;
+              // Check if this filter would have blocked it
+              let wouldBlock = false;
+              if (conditions?.rules) {
+                for (const rule of conditions.rules) {
+                  if (rule.direction && rule.direction !== 'BOTH' && sig.direction !== rule.direction) continue;
+                  const featureKey = rule.feature || f.feature;
+                  const val = snap[featureKey];
+                  if (val === undefined || val === null) continue;
+                  if (rule.min !== undefined && val < rule.min) { wouldBlock = true; break; }
+                  if (rule.max !== undefined && val > rule.max) { wouldBlock = true; break; }
+                  if (rule.equal !== undefined && String(val).toUpperCase() === String(rule.equal).toUpperCase()) { wouldBlock = true; break; }
+                }
+              }
+              if (!wouldBlock && conditions?.feature) {
+                const fv = snap[conditions.feature || f.feature];
+                if (fv !== undefined) {
+                  if (conditions.min !== undefined && fv < conditions.min) wouldBlock = true;
+                  if (conditions.max !== undefined && fv > conditions.max) wouldBlock = true;
+                }
+              }
+              // Also check block_all / block_longs / block_shorts format
+              if (!wouldBlock && conditions?.block_all) {
+                for (const [field, expected] of Object.entries(conditions.block_all)) {
+                  const val = snap[field];
+                  if (val !== undefined && String(val).toUpperCase() === String(expected).toUpperCase()) { wouldBlock = true; break; }
+                }
+              }
+              if (!wouldBlock && conditions?.block_longs && sig.direction === 'LONG') {
+                for (const [field, expr] of Object.entries(conditions.block_longs)) {
+                  const val = snap[field];
+                  if (val !== undefined) {
+                    const m = String(expr).match(/([<>]=?)([\d.]+)/);
+                    if (m && passesOp(val, m[1], parseFloat(m[2]))) { wouldBlock = true; break; }
+                  }
+                }
+              }
+              if (!wouldBlock && conditions?.block_shorts && sig.direction === 'SHORT') {
+                for (const [field, expr] of Object.entries(conditions.block_shorts)) {
+                  const val = snap[field];
+                  if (val !== undefined) {
+                    const m = String(expr).match(/([<>]=?)([\d.]+)/);
+                    if (m && passesOp(val, m[1], parseFloat(m[2]))) { wouldBlock = true; break; }
+                  }
+                }
+              }
+              if (wouldBlock) blocked.push(sig); else passed.push(sig);
+            } else {
+              passed.push(sig);
+            }
+          }
+
+          // BUG FIX: Filtered signals have returnPct=NULL because they never traded.
+          // We must retroactively compute their hypothetical return from candle data.
+          // Get strategy barMinutes for holdBars→time conversion
+          const strategyMap = {};
+          try {
+            const { rows: strats } = await client.query(`SELECT id, "barMinutes" FROM "FracmapStrategy"`);
+            for (const s of strats) strategyMap[s.id] = s.barMinutes;
+          } catch {}
+
+          for (const sig of blocked) {
+            if (sig.returnPct != null) continue; // Already has return (shouldn't happen, but safe)
+            if (!sig.entryPrice || sig.entryPrice <= 0) continue;
+            const barMinutes = strategyMap[sig.strategyId] || 1;
+            const holdBars = sig.holdBars || 60;
+            const holdMs = holdBars * barMinutes * 60 * 1000;
+            const exitTime = new Date(sig.createdAt).getTime() + holdMs;
+            if (exitTime > Date.now()) continue; // Not yet expired
+            const table = barMinutes >= 1440 ? 'Candle1d' : barMinutes >= 60 ? 'Candle1h' : 'Candle1m';
+            try {
+              const { rows: candles } = await client.query(
+                `SELECT close FROM "${table}" WHERE symbol = $1 AND timestamp <= $2 ORDER BY timestamp DESC LIMIT 1`,
+                [sig.symbol, new Date(exitTime).toISOString()]
+              );
+              if (candles.length > 0) {
+                const exitPrice = parseFloat(candles[0].close);
+                const ret = sig.direction === 'LONG'
+                  ? (exitPrice / sig.entryPrice - 1) * 100
+                  : (sig.entryPrice / exitPrice - 1) * 100;
+                if (Math.abs(ret) < 50) { // Sanity check
+                  sig.returnPct = ret;
+                }
+              }
+            } catch {}
+          }
+
+          const computeStats = (sigs) => {
+            const withReturns = sigs.filter(s => s.returnPct != null);
+            if (withReturns.length === 0) return { count: 0, avgReturn: 0, totalReturn: 0, winRate: 0, wins: 0, losses: 0, bestTrade: 0, worstTrade: 0 };
+            const rets = withReturns.map(s => parseFloat(s.returnPct) || 0);
+            const wins = rets.filter(r => r > 0).length;
+            const total = rets.reduce((a, b) => a + b, 0);
+            return {
+              count: withReturns.length, avgReturn: total / withReturns.length, totalReturn: total,
+              winRate: (wins / withReturns.length) * 100, wins, losses: withReturns.length - wins,
+              bestTrade: Math.max(...rets), worstTrade: Math.min(...rets),
+            };
+          };
+
+          // Helper for block_longs/block_shorts expression parsing
+          function passesOp(val, op, target) {
+            if (op === '<') return val < target;
+            if (op === '>') return val > target;
+            if (op === '<=') return val <= target;
+            if (op === '>=') return val >= target;
+            return false;
+          }
+
+          const passedStats = computeStats(passed);
+          const blockedStats = computeStats(blocked);
+          const savedReturn = blockedStats.avgReturn < 0 ? Math.abs(blockedStats.totalReturn) : -blockedStats.totalReturn;
+          const verdict = blockedStats.count === 0 ? 'NEUTRAL' :
+            blockedStats.avgReturn < passedStats.avgReturn ? 'POSITIVE' :
+            blockedStats.avgReturn > passedStats.avgReturn ? 'NEGATIVE' : 'NEUTRAL';
+
+          const impact = {
+            filter_id: f.id, feature: f.feature,
+            measured_at: new Date().toISOString(),
+            period_start: deployedAt,
+            period_hours: Math.round((Date.now() - new Date(deployedAt).getTime()) / 3600000),
+            verdict,
+            summary: { total_signals: signals.length, passed_count: passed.length, blocked_count: blocked.length },
+            passed: passedStats, blocked: blockedStats,
+            improvement: {
+              avg_return_delta: passedStats.avgReturn - blockedStats.avgReturn,
+              win_rate_delta: passedStats.winRate - blockedStats.winRate,
+              saved_cumulative_return: savedReturn,
+            },
+          };
+
+          await client.query(
+            `UPDATE board_filters SET impact_measured_at = now(), impact_data = $1,
+                    trades_passed = $2, trades_filtered = $3
+             WHERE id = $4`,
+            [JSON.stringify(impact), passed.length, blocked.length, f.id]
+          );
+          f.impact_data = impact;
+          f.trades_passed = passed.length;
+          f.trades_filtered = blocked.length;
+          console.log(`  [Impact] Filter #${f.id} (${f.feature}): ${verdict} — ${passed.length} passed, ${blocked.length} blocked`);
+        } catch (err) {
+          console.warn(`  [Impact] Failed to measure filter #${f.id}: ${err.message}`);
+        }
+      }
+    }
+  } catch {}
+
+  // 3. RESEARCH CENTRE — latest research findings
+  let recentResearch = [];
+  try {
+    const { rows } = await client.query(
+      `SELECT * FROM research_log ORDER BY created_at DESC LIMIT 5`
+    );
+    recentResearch = rows;
+  } catch {}
+
+  // 4. MEETING MEMORY CHAIN — last 24h full, older compressed to 50-word digests
+  let meetingChain = { recent: [], digests: [], topicRequests: [] };
+  try {
+    // Last 24h meetings — full detail (the "blockchain")
+    const { rows: recentFull } = await client.query(
+      `SELECT round_number, chair_id, decision, motion_type, deployed, 
+              follow_up_target, follow_up_met, impact_review, 
+              proposals, votes, created_at, digest
+       FROM board_meetings WHERE phase = 'complete' 
+       AND created_at > now() - interval '24 hours'
+       ORDER BY created_at DESC`
+    );
+    meetingChain.recent = recentFull;
+    
+    // Older meetings — compressed digests (up to 50 meetings back)
+    const { rows: olderMeetings } = await client.query(
+      `SELECT round_number, chair_id, decision, digest, created_at
+       FROM board_meetings WHERE phase = 'complete'
+       AND created_at <= now() - interval '24 hours'
+       ORDER BY created_at DESC LIMIT 50`
+    );
+    meetingChain.digests = olderMeetings;
+    
+    // Pending topic requests
+    const { rows: topics } = await client.query(
+      `SELECT id, requested_by, topic, rationale, priority, created_at
+       FROM board_topic_requests WHERE status = 'pending'
+       ORDER BY 
+         CASE priority WHEN 'HIGH' THEN 1 WHEN 'NORMAL' THEN 2 WHEN 'LOW' THEN 3 END,
+         created_at ASC`
+    );
+    meetingChain.topicRequests = topics;
+  } catch {}
+
+  // Keep previous meeting shortcut for backward compat
+  let previousMeeting = meetingChain.recent[0] || null;
+
+  // 6. Coin overrides
+  let coinOverrides = [];
+  try {
+    const { rows } = await client.query(
+      `SELECT * FROM board_coin_overrides WHERE active = true ORDER BY symbol`
+    );
+    coinOverrides = rows;
+  } catch {}
+
+  // 7. Dead research
+  let killedResearch = [];
+  try {
+    const { rows } = await client.query(
+      `SELECT * FROM board_research_log WHERE status = 'killed' ORDER BY created_at DESC LIMIT 10`
+    );
+    killedResearch = rows;
+  } catch {}
+
+  // 8. Active strategies
+  let strategies = [];
+  try {
+    const { rows } = await client.query(
+      `SELECT timeframe, type, active, params FROM "FracmapStrategy" WHERE active = true ORDER BY timeframe`
+    );
+    strategies = rows;
+  } catch {}
+
+  // 9. Completed backtest/analysis requests (show results from recent requests)
+  let completedRequests = [];
+  let pendingRequests = [];
+  try {
+    const { rows: completed } = await client.query(
+      `SELECT * FROM board_requests WHERE status = 'completed' AND completed_at > now() - interval '24 hours' ORDER BY completed_at DESC LIMIT 5`
+    );
+    completedRequests = completed;
+    const { rows: pending } = await client.query(
+      `SELECT * FROM board_requests WHERE status = 'pending' ORDER BY created_at`
+    );
+    pendingRequests = pending;
+  } catch {}
+
+  // 9. REAL-TIME REGIME DATA — Direct DB read from regime_cache (no HTTP dependency)
+  let liveRegime = null;
+  try {
+    // Read pre-computed aggregates for all 3 timeframes
+    const { rows: metaRows } = await client.query(
+      `SELECT timeframe, market_aggregate, computed_at, coin_count
+       FROM regime_cache_meta ORDER BY timeframe`
+    );
+    // Read per-coin snapshots for all timeframes
+    const { rows: coinRows } = await client.query(
+      `SELECT symbol, timeframe, data FROM regime_cache ORDER BY timeframe, symbol`
+    );
+
+    if (metaRows.length > 0) {
+      const byTf = {};
+      for (const m of metaRows) {
+        const agg = typeof m.market_aggregate === 'string' ? JSON.parse(m.market_aggregate) : m.market_aggregate;
+        byTf[m.timeframe] = { aggregate: agg, computedAt: m.computed_at, coinCount: m.coin_count, coins: [] };
+      }
+      for (const c of coinRows) {
+        const data = typeof c.data === 'string' ? JSON.parse(c.data) : c.data;
+        data.symbol = c.symbol;
+        if (byTf[c.timeframe]) byTf[c.timeframe].coins.push(data);
+      }
+      liveRegime = { byTimeframe: byTf };
+      for (const [tf, d] of Object.entries(byTf)) {
+        console.log(`  ✅ Regime (${tf}): ${d.coinCount} coins, mood: ${d.aggregate?.marketMood || 'n/a'}, computed ${new Date(d.computedAt).toLocaleTimeString()}`);
+      }
+    } else {
+      console.warn(`  ⚠ regime_cache_meta is empty — has regime-cache.cjs run?`);
+    }
+  } catch (err) {
+    console.warn(`  ⚠ Could not read regime_cache: ${err.message}`);
+  }
+
+  // 10. REGIME SCORECARD — Read from regime_scorecard table (populated by robustness-cron.js)
+  let regimeScorecard = [];
+  try {
+    const { rows } = await client.query(
+      `SELECT strategy_id, strategy_label, bar_minutes, feature_key, feature_label, 
+              direction_filter, bucket_index, bucket_label,
+              oos_sharpe, oos_win_rate, oos_avg_ret, oos_trades,
+              is_sharpe, is_trades, spread, rho, confidence, total_signals, computed_at
+       FROM regime_scorecard ORDER BY bar_minutes, strategy_id, direction_filter, feature_key, bucket_index`
+    );
+    regimeScorecard = rows;
+    if (rows.length > 0) {
+      const stratCount = new Set(rows.map(r => `${r.strategy_id || 'default'}-${r.bar_minutes}`)).size;
+      console.log(`  ✅ Scorecard: ${rows.length} rows across ${stratCount} strategies`);
+    }
+  } catch (err) {
+    // Table might not exist yet — that's fine
+    console.log(`  ℹ regime_scorecard not available yet (run robustness-cron.js to populate)`);
+  }
+
+  // 11. FILTERED SIGNAL OUTCOMES — counterfactual analysis of blocked trades
+  let filteredOutcomes = null;
+  try {
+    // Check if outcomes are stale (older than 1 hour) — if so, recompute inline
+    const { rows: latest } = await client.query(
+      `SELECT computed_at FROM filtered_signal_outcomes ORDER BY computed_at DESC LIMIT 1`
+    );
+    const isStale = !latest[0] || (Date.now() - new Date(latest[0].computed_at).getTime() > 3600000);
+    
+    if (isStale) {
+      console.log(`  ℹ Filtered outcomes stale or missing — computing fresh...`);
+      try {
+        // Quick inline computation — get filtered signals and evaluate
+        const { rows: filteredSigs } = await client.query(`
+          SELECT f.id, f.symbol, f.direction, f."entryPrice", f."createdAt",
+                 f."holdBars", f."strategyId", f.filtered_by,
+                 COALESCE(s."barMinutes", 1) as "barMinutes"
+          FROM "FracmapSignal" f
+          LEFT JOIN "FracmapStrategy" s ON f."strategyId" = s.id
+          WHERE f.status = 'filtered' AND f."entryPrice" > 0
+          ORDER BY f."createdAt" DESC LIMIT 5000
+        `);
+        
+        const { rows: [actualStats] } = await client.query(`
+          SELECT COUNT(*) as total, AVG("returnPct") as avg_return, SUM("returnPct") as cum_return,
+                 COUNT(*) FILTER (WHERE "returnPct" > 0) as wins
+          FROM "FracmapSignal" WHERE status = 'closed' AND "returnPct" IS NOT NULL
+        `);
+        
+        let evalCount = 0, hypReturns = [];
+        const byFilter = {};
+        
+        for (const sig of filteredSigs.slice(0, 2000)) { // Cap at 2000 for speed
+          const barMs = sig.barMinutes * 60 * 1000;
+          const exitTime = new Date(sig.createdAt).getTime() + (sig.holdBars * barMs);
+          if (exitTime > Date.now()) continue;
+          
+          let table = sig.barMinutes >= 1440 ? 'Candle1d' : sig.barMinutes >= 60 ? 'Candle1h' : 'Candle1m';
+          try {
+            const { rows } = await client.query(
+              `SELECT close FROM "${table}" WHERE symbol = $1 AND timestamp <= $2 ORDER BY timestamp DESC LIMIT 1`,
+              [sig.symbol, new Date(exitTime).toISOString()]
+            );
+            if (rows.length > 0) {
+              const exitPrice = parseFloat(rows[0].close);
+              const ret = sig.direction === 'LONG'
+                ? (exitPrice / sig.entryPrice - 1) * 100
+                : (sig.entryPrice / exitPrice - 1) * 100;
+              if (Math.abs(ret) < 50) {
+                hypReturns.push({ direction: sig.direction, returnPct: ret, filtered_by: sig.filtered_by });
+                evalCount++;
+                if (sig.filtered_by) {
+                  if (!byFilter[sig.filtered_by]) byFilter[sig.filtered_by] = [];
+                  byFilter[sig.filtered_by].push({ direction: sig.direction, returnPct: ret });
+                }
+              }
+            }
+          } catch {}
+        }
+        
+        if (evalCount > 0) {
+          const actualTotal = parseInt(actualStats.total) || 0;
+          const actualAvgRet = parseFloat(actualStats.avg_return) || 0;
+          const actualCumRet = parseFloat(actualStats.cum_return) || 0;
+          const actualWR = actualTotal > 0 ? parseInt(actualStats.wins) / actualTotal * 100 : 0;
+          const hypCum = hypReturns.reduce((s, r) => s + r.returnPct, 0);
+          const hypAvg = hypCum / evalCount;
+          const hypWR = hypReturns.filter(r => r.returnPct > 0).length / evalCount * 100;
+          
+          // Per-filter breakdown
+          const { rows: filterInfo } = await client.query(`SELECT id, feature, timeframe, created_at FROM board_filters ORDER BY id`);
+          const filterMap = {};
+          for (const f of filterInfo) filterMap[f.id] = f;
+          
+          const perFilterBreakdown = {};
+          for (const [fid, sigs] of Object.entries(byFilter)) {
+            const fInfo = filterMap[fid] || { feature: 'unknown', timeframe: 'all', created_at: new Date() };
+            const rets = sigs.map(s => s.returnPct);
+            const longRets = sigs.filter(s => s.direction === 'LONG').map(s => s.returnPct);
+            const shortRets = sigs.filter(s => s.direction === 'SHORT').map(s => s.returnPct);
+            const avg = arr => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+            const wr = arr => arr.length > 0 ? arr.filter(r => r > 0).length / arr.length * 100 : 0;
+            perFilterBreakdown[fid] = {
+              filter_id: parseInt(fid), feature: fInfo.feature, timeframe: fInfo.timeframe || 'all',
+              deployed_at: fInfo.created_at, total_blocked: sigs.length, evaluated: sigs.length,
+              avg_return: avg(rets), win_rate: wr(rets), cum_return: rets.reduce((a, b) => a + b, 0),
+              long: { count: longRets.length, avg_return: avg(longRets), win_rate: wr(longRets) },
+              short: { count: shortRets.length, avg_return: avg(shortRets), win_rate: wr(shortRets) },
+              verdict: avg(rets) < actualAvgRet ? 'POSITIVE' : avg(rets) > actualAvgRet ? 'NEGATIVE' : 'NEUTRAL',
+              hours_active: Math.round((Date.now() - new Date(fInfo.created_at).getTime()) / 3600000),
+              statistically_valid: sigs.length >= 200,
+            };
+          }
+          
+          // Save
+          try {
+            await client.query(`
+              INSERT INTO filtered_signal_outcomes 
+                (total_filtered, total_evaluated, hypothetical_avg_return, hypothetical_win_rate,
+                 hypothetical_cum_return, actual_avg_return, actual_win_rate, actual_cum_return,
+                 filter_value_pct, direction_breakdown, per_filter_breakdown, sample_size_note)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            `, [
+              filteredSigs.length, evalCount, hypAvg, hypWR, hypCum,
+              actualAvgRet, actualWR, actualCumRet, actualAvgRet - hypAvg,
+              JSON.stringify({ long: { count: hypReturns.filter(r => r.direction === 'LONG').length, avgReturn: avg(hypReturns.filter(r => r.direction === 'LONG').map(r => r.returnPct)), winRate: wr(hypReturns.filter(r => r.direction === 'LONG').map(r => r.returnPct)) }, short: { count: hypReturns.filter(r => r.direction === 'SHORT').length, avgReturn: avg(hypReturns.filter(r => r.direction === 'SHORT').map(r => r.returnPct)), winRate: wr(hypReturns.filter(r => r.direction === 'SHORT').map(r => r.returnPct)) } }),
+              JSON.stringify(perFilterBreakdown),
+              `${evalCount} of ${filteredSigs.length} evaluated (inline pre-meeting computation)`
+            ]);
+            console.log(`  ✅ Filter outcomes: ${evalCount} evaluated, value: ${(actualAvgRet - hypAvg).toFixed(4)}% per trade`);
+          } catch (saveErr) {
+            console.warn(`  ⚠ Could not save filter outcomes: ${saveErr.message}`);
+          }
+        }
+      } catch (compErr) {
+        console.warn(`  ⚠ Inline filter computation failed: ${compErr.message}`);
+      }
+    }
+    
+    // Now load the latest (fresh or pre-existing)
+    const { rows } = await client.query(
+      `SELECT * FROM filtered_signal_outcomes ORDER BY computed_at DESC LIMIT 1`
+    );
+    if (rows.length > 0) {
+      filteredOutcomes = rows[0];
+      console.log(`  ✅ Filter outcomes loaded: ${filteredOutcomes.total_evaluated} evaluated, value: ${parseFloat(filteredOutcomes.filter_value_pct).toFixed(4)}% per trade`);
+    }
+  } catch {
+    // Table might not exist yet
+  }
+
+
+  // ═══ v3: DATA HEALTH DIAGNOSTICS ═══
+  let dataHealth = {};
+  try {
+    const { rows: [snapshotCoverage] } = await client.query(`
+      SELECT 
+        COUNT(*)::int as total_signals,
+        COUNT(*) FILTER (WHERE regime_snapshot IS NOT NULL)::int as with_snapshot,
+        COUNT(*) FILTER (WHERE filtered_by IS NOT NULL)::int as with_filtered_by,
+        COUNT(*) FILTER (WHERE status = 'filtered')::int as filtered_signals,
+        COUNT(*) FILTER (WHERE status = 'closed')::int as closed_signals,
+        COUNT(*) FILTER (WHERE status = 'open')::int as open_signals
+      FROM "FracmapSignal" WHERE "createdAt" > now() - interval '7 days'
+    `);
+    dataHealth = snapshotCoverage || {};
+  } catch {}
+
+  // ═══ v3: SIGNAL VOLUME RATE ═══
+  let signalRate = { passed_per_hour: 0, filtered_per_hour: 0 };
+  try {
+    const { rows: [rate] } = await client.query(`
+      SELECT 
+        COUNT(*) FILTER (WHERE status != 'filtered')::float / GREATEST(EXTRACT(EPOCH FROM (now() - MIN("createdAt"))) / 3600, 1) as passed_per_hour,
+        COUNT(*) FILTER (WHERE status = 'filtered')::float / GREATEST(EXTRACT(EPOCH FROM (now() - MIN("createdAt"))) / 3600, 1) as filtered_per_hour
+      FROM "FracmapSignal" WHERE "createdAt" > now() - interval '24 hours'
+    `);
+    signalRate = rate || signalRate;
+  } catch {}
+
+  // ═══ v3: BTC OHLC DATA FOR FORECAST ═══
+  let btcOhlc = [];
+  try {
+    const { rows } = await client.query(`
+      SELECT timestamp, open, high, low, close, volume
+      FROM "Candle1h" WHERE symbol = 'BTCUSDT'
+      ORDER BY timestamp DESC LIMIT 60
+    `);
+    btcOhlc = rows.reverse();
+    console.log(`  ✅ BTC OHLC: ${btcOhlc.length} hourly bars loaded`);
+  } catch (err) {
+    console.warn(`  ⚠ BTC OHLC query failed: ${err.message}`);
+  }
+
+  // ═══ v3: BTC REGIME DATA ═══
+  let btcRegime = null;
+  try {
+    const { rows } = await client.query(
+      `SELECT data FROM regime_cache WHERE symbol = 'BTCUSDT' AND timeframe = '1h' LIMIT 1`
+    );
+    if (rows.length > 0) {
+      btcRegime = typeof rows[0].data === 'string' ? JSON.parse(rows[0].data) : rows[0].data;
+    }
+  } catch {}
+
+  // ═══ v3: PREVIOUS BTC FORECAST (for scoring) ═══
+  let previousForecast = null;
+  try {
+    const { rows } = await client.query(
+      `SELECT * FROM board_btc_forecasts WHERE reviewed_at IS NULL ORDER BY created_at DESC LIMIT 1`
+    );
+    previousForecast = rows.length > 0 ? rows[0] : null;
+  } catch {}
+
+  // ═══ v3: BTC FORECAST TRACK RECORD ═══
+  let forecastRecord = { total: 0, correct: 0, streak: 0 };
+  try {
+    const { rows } = await client.query(
+      `SELECT consensus_correct FROM board_btc_forecasts WHERE reviewed_at IS NOT NULL ORDER BY created_at DESC LIMIT 20`
+    );
+    forecastRecord.total = rows.length;
+    forecastRecord.correct = rows.filter(r => r.consensus_correct).length;
+    let streak = 0;
+    for (const r of rows) { if (r.consensus_correct) streak++; else break; }
+    forecastRecord.streak = streak;
+  } catch {}
+
+  // ═══ v3: COMPETITION LEADERBOARD ═══
+  let competitionLeaderboard = [];
+  try {
+    const { rows } = await client.query(`
+      SELECT member_id, COUNT(*)::int as entries,
+             COUNT(*) FILTER (WHERE evaluated_at IS NOT NULL)::int as evaluated,
+             AVG(score) FILTER (WHERE score IS NOT NULL) as avg_score
+      FROM board_competitions WHERE active = true
+      GROUP BY member_id ORDER BY AVG(score) DESC NULLS LAST
+    `);
+    competitionLeaderboard = rows;
+  } catch {}
+
+  let activeCompetitions = [];
+  try {
+    const { rows } = await client.query(
+      `SELECT * FROM board_competitions WHERE active = true AND evaluated_at IS NULL ORDER BY created_at DESC LIMIT 10`
+    );
+    activeCompetitions = rows;
+  } catch {}
+
+  // ═══ v3: HERO CONTENT & FEEDBACK ═══
+  let heroContent = null;
+  try {
+    const { rows } = await client.query(
+      `SELECT * FROM board_hero_content WHERE active = true ORDER BY created_at DESC LIMIT 1`
+    );
+    heroContent = rows[0] || null;
+  } catch {}
+
+  let heroHistory = [];
+  try {
+    const { rows } = await client.query(
+      `SELECT authored_by, headline, thumbs_up, thumbs_down, created_at
+       FROM board_hero_content ORDER BY created_at DESC LIMIT 5`
+    );
+    heroHistory = rows;
+  } catch {}
+
+  // ═══ v3: USER FEEDBACK SUMMARY ═══
+  let feedbackSummary = [];
+  try {
+    const { rows } = await client.query(`
+      SELECT feature_type, feature_id, 
+             COUNT(*) FILTER (WHERE vote = 'up')::int as thumbs_up,
+             COUNT(*) FILTER (WHERE vote = 'down')::int as thumbs_down
+      FROM user_feedback WHERE created_at > now() - interval '7 days'
+      GROUP BY feature_type, feature_id
+    `);
+    feedbackSummary = rows;
+  } catch {}
+
+  // ═══ COIN STRATEGY PERFORMANCE & REVIEW QUEUE ═══
+  let coinStrategyReport = { strategies: [], summary: 'Not yet computed.' };
+  try {
+    coinStrategyReport = await coinStrategyManager.generateCoinStrategyReport(client);
+    console.log(`  ✅ Coin strategy report: ${coinStrategyReport.strategies.length} active strategies`);
+  } catch (err) {
+    console.warn(`  ⚠ Coin strategy report failed: ${err.message}`);
+  }
+
+  let nextCoinForReview = null;
+  try {
+    nextCoinForReview = await coinStrategyManager.getNextCoinForReview(client);
+    if (nextCoinForReview) {
+      console.log(`  ✅ Next coin for review: ${nextCoinForReview.symbol} (${nextCoinForReview.timeframe})`);
+    } else {
+      console.log(`  ℹ No coins available for universe review`);
+    }
+  } catch (err) {
+    console.warn(`  ⚠ Coin review queue failed: ${err.message}`);
+  }
+
+  return {
+    timestamp: new Date().toISOString(),
+    operatorMessage: await getOperatorMessage(client),
+    hourlyPerformance,
+    aggregate24h,
+    best24h,
+    worst24h,
+    filterImpact,
+    recentResearch,
+    previousMeeting,
+    meetingChain,
+    coinOverrides,
+    killedResearch,
+    strategies,
+    completedRequests,
+    pendingRequests,
+    liveRegime,
+    regimeScorecard,
+    filteredOutcomes,
+    dataHealth,
+    signalRate,
+    btcOhlc,
+    btcRegime,
+    previousForecast,
+    forecastRecord,
+    competitionLeaderboard,
+    activeCompetitions,
+    heroContent,
+    heroHistory,
+    feedbackSummary,
+    coinStrategyReport,
+    nextCoinForReview,
+    baselines: {
+      '1h_hedged': { sharpe: 1.25, winRate: 52.5, pf: 1.06, trades: 33136 },
+      '1d_c5_34': { sharpe: 1.16, winRate: 54.4, pf: 2.05 },
+      '1d_c55_89_hedged': { sharpe: 1.95, winRate: 60, pf: 2.84, trades: 35 },
+      '1d_c2_12': { sharpe: 1.12, winRate: 52.1, pf: 1.50, trades: 6593 },
+    },
+  };
+}
+
+// Format context into a readable briefing for LLMs
+function formatBriefing(ctx) {
+  const hp = ctx.hourlyPerformance;
+  const prev = ctx.previousMeeting;
+  const chain = ctx.meetingChain || { recent: [], digests: [], topicRequests: [] };
+  
+  let briefing = `═══ MEETING BRIEFING — ${ctx.timestamp} ═══\n\n`;
+  
+  // Operator message — injected at the very top so the board sees it first
+  if (ctx.operatorMessage) {
+    briefing += `╔══════════════════════════════════════════════════════════════════╗\n`;
+    briefing += `║  ⚠ OPERATOR MESSAGE — FROM THE HUMAN SYSTEM OPERATOR           ║\n`;
+    briefing += `╚══════════════════════════════════════════════════════════════════╝\n`;
+    briefing += `${ctx.operatorMessage}\n`;
+    briefing += `───────────────────────────────────────────────────────────────────\n`;
+    briefing += `NOTE: The operator has direct access to the live system and database.\n`;
+    briefing += `Their statements about system state are AUTHORITATIVE and override\n`;
+    briefing += `any inferences you might draw from meeting history or data patterns.\n`;
+    briefing += `If the operator says something is fixed, it IS fixed. Do not re-litigate.\n`;
+    briefing += `───────────────────────────────────────────────────────────────────\n\n`;
+  }
+
+  // ═══ v3: DATA HEALTH & FILTER MATURITY (shown first!) ═══
+  // Maturity helper
+  const computeMaturity = (filter) => {
+    const totalSignals = (filter.trades_filtered || 0) + (filter.trades_passed || 0);
+    const hoursActive = Math.round((Date.now() - new Date(filter.created_at).getTime()) / 3600000);
+    const signalMaturity = Math.min(100, Math.round((totalSignals / 2000) * 100));
+    const timeMaturity = Math.min(100, Math.round((hoursActive / 72) * 100));
+    const overallMaturity = Math.min(signalMaturity, timeMaturity);
+    return { totalSignals, hoursActive, signalMaturity, timeMaturity, overallMaturity, isDecisionReady: totalSignals >= 2000 && hoursActive >= 72 };
+  };
+
+  if (ctx.dataHealth) {
+    const dh = ctx.dataHealth;
+    briefing += `📋 DATA HEALTH (7d): ${dh.total_signals || 0} signals, ${dh.with_snapshot || 0} with regime_snapshot (${dh.total_signals > 0 ? ((dh.with_snapshot/dh.total_signals)*100).toFixed(0) : 0}%), ${dh.filtered_signals || 0} filtered, ${dh.closed_signals || 0} closed\n`;
+    briefing += `  Signal rate: ${parseFloat(ctx.signalRate?.passed_per_hour || 0).toFixed(1)} passed/hr, ${parseFloat(ctx.signalRate?.filtered_per_hour || 0).toFixed(1)} filtered/hr\n\n`;
+  }
+
+  let anyDecisionReady = false;
+  if (ctx.filterImpact.length > 0) {
+    briefing += `🔒 FILTER MATURITY STATUS (decision-readiness):\n`;
+    for (const f of ctx.filterImpact) {
+      const mat = computeMaturity(f);
+      const bar = '█'.repeat(Math.round(mat.overallMaturity / 5)) + '░'.repeat(20 - Math.round(mat.overallMaturity / 5));
+      const lock = mat.isDecisionReady ? '🔓' : '🔒';
+      briefing += `  ${lock} #${f.id} ${f.feature} [${(f.timeframe||'all').toUpperCase()}]: ${bar} ${mat.overallMaturity}% (${mat.totalSignals}/2000 sigs, ${mat.hoursActive}/72h)\n`;
+      if (mat.isDecisionReady) anyDecisionReady = true;
+    }
+    if (!anyDecisionReady) {
+      briefing += `\n  ╔═══════════════════════════════════════════════════════════════╗\n`;
+      briefing += `  ║  ⚠ NO FILTERS DECISION-READY. Filter changes are BLOCKED.     ║\n`;
+      briefing += `  ║  Focus: research, competition, forecasts, hero, AFFIRM_PATIENCE║\n`;
+      briefing += `  ╚═══════════════════════════════════════════════════════════════╝\n`;
+    }
+    briefing += `\n`;
+  }
+
+  
+  // Regime — Multi-timeframe with per-coin detail and SR scorecard
+  if (ctx.liveRegime?.byTimeframe) {
+    const tfOrder = ['1m', '1h', '1d'];
+    const byTf = ctx.liveRegime.byTimeframe;
+    const availableTfs = tfOrder.filter(tf => byTf[tf]);
+
+    if (availableTfs.length > 0) {
+      briefing += `📊 REGIME CONDITIONS (MULTI-TIMEFRAME):\n`;
+      briefing += `Timeframes available: ${availableTfs.join(', ')}\n\n`;
+
+      // ── Cross-timeframe summary table ──
+      briefing += `                         ${availableTfs.map(tf => tf.toUpperCase().padStart(12)).join('')}\n`;
+      briefing += `  ───────────────────────${availableTfs.map(() => '────────────').join('')}\n`;
+
+      const fields = [
+        { label: 'Coins analysed', fn: a => String(a.totalCoins || 0) },
+        { label: 'Market Mood', fn: a => (a.marketMood || 'n/a').split('—')[0].trim().slice(0, 11) },
+        { label: 'TREND', fn: a => `${a.regime?.TREND || 0} (${a.totalCoins ? ((a.regime?.TREND || 0)/a.totalCoins*100).toFixed(0) : 0}%)` },
+        { label: 'RANGE', fn: a => `${a.regime?.RANGE || 0} (${a.totalCoins ? ((a.regime?.RANGE || 0)/a.totalCoins*100).toFixed(0) : 0}%)` },
+        { label: 'TRANSITION', fn: a => `${a.regime?.TRANSITION || 0} (${a.totalCoins ? ((a.regime?.TRANSITION || 0)/a.totalCoins*100).toFixed(0) : 0}%)` },
+        { label: 'VOL COMPRESSED', fn: a => `${a.volState?.COMPRESSED || 0} (${a.totalCoins ? ((a.volState?.COMPRESSED || 0)/a.totalCoins*100).toFixed(0) : 0}%)` },
+        { label: 'VOL NORMAL', fn: a => `${a.volState?.NORMAL || 0} (${a.totalCoins ? ((a.volState?.NORMAL || 0)/a.totalCoins*100).toFixed(0) : 0}%)` },
+        { label: 'VOL EXPANDING', fn: a => `${a.volState?.EXPANDING || 0} (${a.totalCoins ? ((a.volState?.EXPANDING || 0)/a.totalCoins*100).toFixed(0) : 0}%)` },
+        { label: 'POS BOTTOM', fn: a => `${a.rangePosition?.BOTTOM || 0} (${a.totalCoins ? ((a.rangePosition?.BOTTOM || 0)/a.totalCoins*100).toFixed(0) : 0}%)` },
+        { label: 'POS MIDDLE', fn: a => `${a.rangePosition?.MIDDLE || 0} (${a.totalCoins ? ((a.rangePosition?.MIDDLE || 0)/a.totalCoins*100).toFixed(0) : 0}%)` },
+        { label: 'POS TOP', fn: a => `${a.rangePosition?.TOP || 0} (${a.totalCoins ? ((a.rangePosition?.TOP || 0)/a.totalCoins*100).toFixed(0) : 0}%)` },
+        { label: 'Avg Hurst', fn: a => (a.avgHurst || 0).toFixed(3) },
+        { label: 'Avg ATR Compr', fn: a => (a.avgAtrCompression || 0).toFixed(3) },
+        { label: 'Long Favourable', fn: a => `${a.longFavourableCount || 0}/${a.totalCoins || 0}` },
+        { label: 'Short Favourable', fn: a => `${a.shortFavourableCount || 0}/${a.totalCoins || 0}` },
+      ];
+
+      for (const f of fields) {
+        const row = `  ${f.label.padEnd(23)}${availableTfs.map(tf => {
+          const agg = byTf[tf]?.aggregate;
+          return agg ? f.fn(agg).padStart(12) : '         n/a';
+        }).join('')}`;
+        briefing += row + '\n';
+      }
+
+      // ── Regime SR Scorecard — Read from ctx.regimeScorecard ──
+      const scorecardRows = ctx.regimeScorecard || [];
+
+      if (scorecardRows.length > 0) {
+        briefing += `\n═══ REGIME SR SCORECARD — Live from scanner backtest ═══\n`;
+        briefing += `(IS→OOS validated. ρ = Spearman rank stability. Spread > 2.0 + ρ > 0.4 = proven discriminator)\n`;
+
+        // Group by strategy, then direction, then feature
+        const byStrat = {};
+        for (const r of scorecardRows) {
+          const stratKey = `${r.bar_minutes}-${r.strategy_id || 'default'}`;
+          if (!byStrat[stratKey]) byStrat[stratKey] = { label: r.strategy_label || `${TF_LABEL[r.bar_minutes] || r.bar_minutes}-default`, barMinutes: r.bar_minutes, totalSignals: r.total_signals, computedAt: r.computed_at, byDir: {} };
+          const dir = r.direction_filter;
+          if (!byStrat[stratKey].byDir[dir]) byStrat[stratKey].byDir[dir] = {};
+          if (!byStrat[stratKey].byDir[dir][r.feature_key]) byStrat[stratKey].byDir[dir][r.feature_key] = { label: r.feature_label, buckets: [], spread: r.spread, rho: r.rho, confidence: r.confidence };
+          byStrat[stratKey].byDir[dir][r.feature_key].buckets[r.bucket_index] = r;
+        }
+
+        const TF_LABEL = { 1: '1m', 60: '1h', 1440: '1d' };
+
+        for (const [stratKey, strat] of Object.entries(byStrat)) {
+          const tfLabel = TF_LABEL[strat.barMinutes] || `${strat.barMinutes}m`;
+          const computedAt = strat.computedAt ? new Date(strat.computedAt).toISOString().slice(0, 16) : '?';
+          briefing += `\n  ━━━ ${strat.label} [${tfLabel}] — ${strat.totalSignals || '?'} signals, computed ${computedAt} ━━━\n`;
+
+          for (const dir of ['all', 'long', 'short']) {
+            if (!strat.byDir[dir]) continue;
+            const dirLabel = dir === 'all' ? 'ALL' : dir.toUpperCase();
+            briefing += `    ${dirLabel}:\n`;
+            briefing += `    Feature              Bucket 1              Bucket 2              Bucket 3              Spread  ρ     Conf\n`;
+
+            const features = Object.entries(strat.byDir[dir]).sort((a, b) => (b[1].spread || 0) - (a[1].spread || 0));
+            for (const [key, feat] of features) {
+              const bucketStrs = [];
+              for (let bi = 0; bi < 3; bi++) {
+                const b = feat.buckets[bi];
+                if (b && b.oos_trades >= 3) {
+                  bucketStrs.push(`${(b.bucket_label || '').slice(0, 8)}: SR ${(b.oos_sharpe || 0) >= 0 ? ' ' : ''}${(b.oos_sharpe || 0).toFixed(1)} (${b.oos_trades}t)`.padEnd(22));
+                } else {
+                  bucketStrs.push('n/a                   ');
+                }
+              }
+              const rhoStr = feat.rho !== null && feat.rho !== undefined ? (feat.rho >= 0 ? ' ' : '') + Number(feat.rho).toFixed(2) : ' n/a';
+              briefing += `      ${(feat.label || key).padEnd(22)}${bucketStrs.join('')}${String((feat.spread || 0).toFixed(1)).padStart(5)}  ${rhoStr}  ${(feat.confidence || '?').slice(0, 5)}\n`;
+            }
+          }
+        }
+
+        briefing += `\n  KEY: SR > 1.0 = profitable. SR < 0 = losing. Spread > 2.0 + ρ > 0.4 = USE for filtering.\n`;
+      } else {
+        briefing += `\n═══ REGIME SR SCORECARD — Not yet populated ═══\n`;
+        briefing += `  ⚠ Run robustness-cron.js to compute scorecard from active strategies.\n`;
+        briefing += `  Static reminder: posInRange BOTTOM SR -1.0 / TOP SR 3.7, volState COMPRESSED SR -1.0\n`;
+      }
+
+      // ── Per-coin regime heatmap (1H primary, compact) ──
+      const primary = byTf['1h'] || byTf[availableTfs[0]];
+      if (primary?.coins?.length > 0) {
+        briefing += `\n═══ PER-COIN REGIME (1H) — ${primary.coins.length} coins ═══\n`;
+        briefing += `  Symbol         Price      24h%   PosRng VolSt   ATRc  Trend Perst Hurst Regime     LongOK ShortOK\n`;
+        briefing += `  ─────────────  ─────────  ─────  ────── ─────── ───── ───── ───── ───── ────────── ────── ───────\n`;
+
+        // Sort by posInRange60 for easy visual scanning
+        const sorted = [...primary.coins].sort((a, b) => (b.posInRange60 || 0) - (a.posInRange60 || 0));
+        for (const c of sorted) {
+          const sym = (c.symbol || '').replace('USDT', '').padEnd(13);
+          const price = (c.price || 0) < 1 ? (c.price || 0).toFixed(5).padStart(9) : (c.price || 0).toFixed(2).padStart(9);
+          const chg = `${(c.change24h || 0) >= 0 ? '+' : ''}${(c.change24h || 0).toFixed(1)}%`.padStart(5);
+          const pir = (c.posInRange60 || 0).toFixed(2);
+          const pirBucket = (c.posInRange60 || 0.5) < 0.25 ? 'B' : (c.posInRange60 || 0.5) > 0.75 ? 'T' : 'M';
+          const vs = (c.volState || 'NORMAL').slice(0, 7).padEnd(7);
+          const atr = (c.atrCompression || 0).toFixed(2).padStart(5);
+          const tr = `${(c.trend60 || 0) >= 0 ? '+' : ''}${(c.trend60 || 0).toFixed(2)}`.padStart(5);
+          const pe = (c.persistence60 || 0).toFixed(2).padStart(5);
+          const hu = (c.hurst || 0).toFixed(3).padStart(5);
+          const reg = (c.regime || 'TRANS').padEnd(10);
+          const longOk = c.longFavourable ? '  ✅  ' : '  ❌  ';
+          const shortOk = c.shortFavourable ? '  ✅  ' : '  ❌  ';
+          briefing += `  ${sym}  ${price}  ${chg}  ${pir}${pirBucket} ${vs} ${atr} ${tr} ${pe} ${hu} ${reg} ${longOk} ${shortOk}\n`;
+        }
+      }
+
+      // ── Cross-timeframe divergence alerts ──
+      if (byTf['1m']?.coins?.length > 0 && byTf['1h']?.coins?.length > 0) {
+        const alerts = [];
+        const m1Map = {};
+        for (const c of byTf['1m'].coins) m1Map[c.symbol] = c;
+        for (const c of (byTf['1h']?.coins || [])) {
+          const m1 = m1Map[c.symbol];
+          if (!m1) continue;
+          // Flag if 1m and 1h regime disagree
+          if (m1.regime !== c.regime) {
+            alerts.push(`${c.symbol.replace('USDT','')}: 1m=${m1.regime} vs 1h=${c.regime}`);
+          }
+          // Flag if 1m vol state is EXPANDING but 1h is COMPRESSED (or vice versa)
+          if ((m1.volState === 'EXPANDING' && c.volState === 'COMPRESSED') || (m1.volState === 'COMPRESSED' && c.volState === 'EXPANDING')) {
+            alerts.push(`${c.symbol.replace('USDT','')}: 1m vol=${m1.volState} vs 1h vol=${c.volState}`);
+          }
+        }
+        if (alerts.length > 0) {
+          briefing += `\n⚠ CROSS-TIMEFRAME DIVERGENCES (1m vs 1h):\n`;
+          for (const a of alerts.slice(0, 15)) briefing += `  ${a}\n`;
+          if (alerts.length > 15) briefing += `  ... and ${alerts.length - 15} more\n`;
+        }
+      }
+
+      // ── 1D summary (condensed, just aggregates) ──
+      if (byTf['1d']?.aggregate) {
+        const da = byTf['1d'].aggregate;
+        briefing += `\n📅 DAILY REGIME CONTEXT:\n`;
+        briefing += `  Mood: ${da.marketMood || 'n/a'}\n`;
+        briefing += `  TREND ${da.regime?.TREND || 0} / RANGE ${da.regime?.RANGE || 0} / TRANS ${da.regime?.TRANSITION || 0}\n`;
+        briefing += `  VOL: COMPRS ${da.volState?.COMPRESSED || 0} / NORMAL ${da.volState?.NORMAL || 0} / EXPAND ${da.volState?.EXPANDING || 0}\n`;
+        briefing += `  POS: BOTTOM ${da.rangePosition?.BOTTOM || 0} / MIDDLE ${da.rangePosition?.MIDDLE || 0} / TOP ${da.rangePosition?.TOP || 0}\n`;
+        briefing += `  Avg Hurst: ${(da.avgHurst || 0).toFixed(3)}, Avg ATR: ${(da.avgAtrCompression || 0).toFixed(3)}\n`;
+      }
+
+      briefing += `\n`;
+    }
+  } else if (ctx.liveRegime?.briefing) {
+    // Legacy fallback — old format
+    briefing += `📊 REGIME CONDITIONS:\n${ctx.liveRegime.briefing}\n\n`;
+  }
+  
+  // HEADLINE: Aggregate 24h performance
+  if (ctx.aggregate24h) {
+    const a = ctx.aggregate24h;
+    const totalClosed = parseInt(a.total_closed) || 0;
+    const totalReturn = parseFloat(a.total_return) || 0;
+    const totalWins = parseInt(a.total_wins) || 0;
+    const wr = totalClosed > 0 ? (totalWins / totalClosed * 100).toFixed(1) : '0';
+    const avgRet = parseFloat(a.avg_return) || 0;
+    const emoji = totalReturn >= 0 ? '🟢' : '🔴';
+    briefing += `${emoji} 24-HOUR HEADLINE: ${totalReturn >= 0 ? '+' : ''}${totalReturn.toFixed(2)}% cumulative across ${totalClosed} closed signals (WR ${wr}%, avg ${avgRet >= 0 ? '+' : ''}${avgRet.toFixed(3)}% per trade)\n\n`;
+  }
+  
+  // Per-timeframe performance breakdown
+  briefing += `📈 PERFORMANCE BY SIGNAL PERIODICITY:\n`;
+  for (const [tf, p] of Object.entries(hp)) {
+    if (!p) continue;
+    briefing += `  ${tf.toUpperCase()} SIGNALS:`;
+    briefing += ` ${p.signals_last_hour || 0} new this hour (${p.longs_last_hour || 0}L/${p.shorts_last_hour || 0}S),`;
+    briefing += ` ${p.open_positions || 0} open\n`;
+    if (parseInt(p.closed_last_hour) > 0) {
+      const wr = (parseInt(p.wins_last_hour) / parseInt(p.closed_last_hour) * 100).toFixed(0);
+      briefing += `    Last hour: ${p.closed_last_hour} closed, WR ${wr}%, avg ${parseFloat(p.avg_return_last_hour || 0).toFixed(3)}%, total ${parseFloat(p.total_return_last_hour || 0).toFixed(2)}%\n`;
+    }
+    if (parseInt(p.closed_24h) > 0) {
+      const wr24 = (parseInt(p.wins_24h) / parseInt(p.closed_24h) * 100).toFixed(0);
+      briefing += `    24h: ${p.closed_24h} closed, WR ${wr24}%, total return ${parseFloat(p.total_return_24h || 0).toFixed(2)}%\n`;
+    }
+  }
+  
+  // Best and worst trades
+  if (ctx.best24h?.length > 0) {
+    const tfMap = { 1: '1m', 60: '1h', 1440: '1d' };
+    briefing += `\n  🏆 TOP 5 TRADES (24h): `;
+    briefing += ctx.best24h.map(t => `${t.symbol.replace('USDT','')} ${t.direction} +${parseFloat(t.returnPct).toFixed(2)}% [${tfMap[t.barMinutes] || '?'}]`).join(' · ');
+    briefing += `\n`;
+  }
+  if (ctx.worst24h?.length > 0) {
+    const tfMap = { 1: '1m', 60: '1h', 1440: '1d' };
+    briefing += `  💀 WORST 5 TRADES (24h): `;
+    briefing += ctx.worst24h.map(t => `${t.symbol.replace('USDT','')} ${t.direction} ${parseFloat(t.returnPct).toFixed(2)}% [${tfMap[t.barMinutes] || '?'}]`).join(' · ');
+    briefing += `\n`;
+  }
+  
+  // Filter impact
+  if (ctx.filterImpact.length > 0) {
+    briefing += `\n🔬 ACTIVE FILTERS & MEASURED IMPACT:\n`;
+    for (const f of ctx.filterImpact) {
+      const total = (f.trades_filtered || 0) + (f.trades_passed || 0);
+      const pct = total > 0 ? ((f.trades_filtered / total) * 100).toFixed(0) : '0';
+      const tfLabel = (f.timeframe || 'all').toUpperCase();
+      briefing += `  [${f.active ? 'ON' : 'OFF'}] ${f.feature} (Filter #${f.id}) [${tfLabel} signals]: ${f.trades_filtered || 0} filtered / ${f.trades_passed || 0} passed (${pct}% block rate)\n`;
+      
+      // Add measured impact if available
+      const impact = typeof f.impact_data === 'string' ? JSON.parse(f.impact_data) : f.impact_data;
+      if (impact) {
+        const emoji = impact.verdict === 'POSITIVE' ? '✅' : impact.verdict === 'NEGATIVE' ? '❌' : '⚪';
+        const totalSignals = (impact.passed?.count || 0) + (impact.blocked?.count || 0);
+        const isValid = totalSignals >= 200;
+        briefing += `    ${emoji} MEASURED IMPACT (${impact.period_hours}h since deployment, ${totalSignals} total signals):\n`;
+        if (!isValid) {
+          briefing += `    ⚠ INSUFFICIENT DATA: ${totalSignals} signals — need 2000+ for reliable conclusions. IGNORE this verdict.\n`;
+        }
+        briefing += `    Passed trades: avg ${impact.passed.avgReturn?.toFixed(3)}%, WR ${impact.passed.winRate?.toFixed(1)}% (${impact.passed.count} trades)\n`;
+        briefing += `    Blocked trades: avg ${impact.blocked.avgReturn?.toFixed(3)}%, WR ${impact.blocked.winRate?.toFixed(1)}% (${impact.blocked.count} trades)\n`;
+        briefing += `    Per-trade improvement: ${impact.improvement.avg_return_delta > 0 ? '+' : ''}${impact.improvement.avg_return_delta?.toFixed(4)}%\n`;
+        briefing += `    Net cumulative saved: ${impact.improvement.saved_cumulative_return > 0 ? '+' : ''}${impact.improvement.saved_cumulative_return?.toFixed(2)}%\n`;
+        briefing += `    VERDICT: ${impact.verdict}${!isValid ? ' (PRELIMINARY — low sample, do NOT act on this)' : ''}\n`;
+      } else {
+        briefing += `    ⏳ No impact data yet — awaiting enough trades to measure\n`;
+      }
+    }
+  }
+  
+  // ═══ FILTERED SIGNAL COUNTERFACTUAL ANALYSIS ═══
+  if (ctx.filteredOutcomes) {
+    const fo = ctx.filteredOutcomes;
+    const dir = typeof fo.direction_breakdown === 'string' ? JSON.parse(fo.direction_breakdown) : fo.direction_breakdown;
+    const perFilter = typeof fo.per_filter_breakdown === 'string' ? JSON.parse(fo.per_filter_breakdown) : fo.per_filter_breakdown;
+    const val = parseFloat(fo.filter_value_pct);
+    const helpingOrHurting = val > 0 ? '✅ FILTERS HELPING' : '❌ FILTERS HURTING';
+    const totalEval = parseInt(fo.total_evaluated) || 0;
+    
+    // Statistical context — is this reading even meaningful?
+    const stdErr = totalEval > 1 ? Math.abs(val) / Math.sqrt(totalEval) * 10 : 999;
+    const isSignificant = totalEval >= 200 && Math.abs(val) > stdErr * 2;
+    
+    briefing += `\n📊 FILTER COUNTERFACTUAL ANALYSIS (${totalEval} blocked signals evaluated):\n`;
+    briefing += `  ${fo.sample_size_note}\n`;
+    
+    // Statistical warning
+    if (totalEval < 200) {
+      briefing += `  ⚠ WARNING: ${totalEval} signals is TOO FEW for reliable conclusions. Need 2000+ for statistical validity.\n`;
+      briefing += `  ⚠ Standard error at this sample size: ±${(stdErr * 2).toFixed(3)}%. Current reading (${val > 0 ? '+' : ''}${val.toFixed(4)}%) is WITHIN NOISE.\n`;
+      briefing += `  ⚠ DO NOT make filter changes based on this data. WAIT for more signals.\n`;
+    } else if (totalEval < 2000) {
+      briefing += `  ⚠ CAUTION: ${totalEval} signals provides PRELIMINARY evidence only. Need 2000+ for full confidence.\n`;
+    }
+    
+    briefing += `  ┌─────────────────────┬──────────────┬──────────────┐\n`;
+    briefing += `  │                     │  Traded (live)│  Filtered (hyp)│\n`;
+    briefing += `  ├─────────────────────┼──────────────┼──────────────┤\n`;
+    briefing += `  │ Avg Return          │  ${parseFloat(fo.actual_avg_return).toFixed(4)}%    │  ${parseFloat(fo.hypothetical_avg_return).toFixed(4)}%    │\n`;
+    briefing += `  │ Win Rate            │  ${parseFloat(fo.actual_win_rate).toFixed(1)}%       │  ${parseFloat(fo.hypothetical_win_rate).toFixed(1)}%       │\n`;
+    briefing += `  │ Cum Return          │  ${parseFloat(fo.actual_cum_return).toFixed(2)}%   │  ${parseFloat(fo.hypothetical_cum_return).toFixed(2)}%    │\n`;
+    briefing += `  └─────────────────────┴──────────────┴──────────────┘\n`;
+    briefing += `  Per-trade filter value: ${val > 0 ? '+' : ''}${val.toFixed(4)}% ${isSignificant ? '(STATISTICALLY SIGNIFICANT)' : '(within noise — NOT significant)'}\n`;
+    briefing += `  ${helpingOrHurting}\n`;
+    
+    if (dir) {
+      if (dir.long?.count > 0) {
+        briefing += `  LONG filtered: ${dir.long.count} signals, hyp avg ${dir.long.avgReturn.toFixed(4)}%, WR ${dir.long.winRate.toFixed(1)}%\n`;
+      }
+      if (dir.short?.count > 0) {
+        briefing += `  SHORT filtered: ${dir.short.count} signals, hyp avg ${dir.short.avgReturn.toFixed(4)}%, WR ${dir.short.winRate.toFixed(1)}%\n`;
+      }
+    }
+    
+    // Per-filter breakdown
+    if (perFilter && Object.keys(perFilter).length > 0) {
+      briefing += `\n  ── PER-FILTER IMPACT BREAKDOWN ──\n`;
+      briefing += `  Filter#  Feature              TF    Blocked  Eval'd   HypAvg   HypWR   Verdict    Hours  Valid?\n`;
+      briefing += `  ───────  ───────────────────  ────  ───────  ──────  ───────  ──────  ─────────  ─────  ──────\n`;
+      for (const [fid, pf] of Object.entries(perFilter)) {
+        const feat = (pf.feature || '?').slice(0, 19).padEnd(19);
+        const tf = (pf.timeframe || 'all').padEnd(4);
+        const blocked = String(pf.total_blocked).padStart(7);
+        const evalN = String(pf.evaluated).padStart(6);
+        const avgR = `${pf.avg_return >= 0 ? '+' : ''}${pf.avg_return.toFixed(3)}%`.padStart(7);
+        const wr = `${pf.win_rate.toFixed(0)}%`.padStart(6);
+        const verdict = pf.verdict.padEnd(9);
+        const hours = String(pf.hours_active).padStart(5);
+        const valid = pf.statistically_valid ? '  ✅  ' : '  ⚠️  ';
+        briefing += `  #${String(fid).padEnd(5)}  ${feat}  ${tf}  ${blocked}  ${evalN}  ${avgR}  ${wr}  ${verdict}  ${hours}  ${valid}\n`;
+        
+        // Direction split
+        if (pf.long?.count > 0 || pf.short?.count > 0) {
+          if (pf.long?.count > 0) briefing += `          └─ LONG:  ${pf.long.count} blocked, hyp avg ${pf.long.avg_return.toFixed(3)}%, WR ${pf.long.win_rate.toFixed(0)}%\n`;
+          if (pf.short?.count > 0) briefing += `          └─ SHORT: ${pf.short.count} blocked, hyp avg ${pf.short.avg_return.toFixed(3)}%, WR ${pf.short.win_rate.toFixed(0)}%\n`;
+        }
+      }
+    }
+    
+    briefing += `\n  ⚠ REMEMBER: Filters are based on months/years of backtested evidence (see REGIME SR SCORECARD above).\n`;
+    briefing += `  Short-term live readings may contradict long-term statistical evidence. This is EXPECTED variance.\n`;
+    briefing += `  Only consider changing filters when: 2000+ signals evaluated AND effect size > 2× standard error AND consistent across long/short.\n`;
+  }
+
+  // ═══ MEETING MEMORY CHAIN ═══
+  // Last 24h meetings — full detail
+  if (chain.recent.length > 0) {
+    briefing += `\n🔗 MEETING CHAIN — LAST 24 HOURS (${chain.recent.length} meetings):\n`;
+    for (const m of chain.recent) {
+      briefing += `\n  ── Meeting #${m.round_number} (${m.chair_id.toUpperCase()} chair, ${new Date(m.created_at).toLocaleTimeString()}) ──\n`;
+      briefing += `  Decision: ${m.decision}\n`;
+      briefing += `  Deployed: ${m.deployed ? 'YES' : 'NO'}\n`;
+      
+      // Extract key content from proposals
+      const proposals = typeof m.proposals === 'string' ? JSON.parse(m.proposals) : m.proposals;
+      if (proposals) {
+        if (proposals.situation?.situation_summary) {
+          briefing += `  Situation: ${proposals.situation.situation_summary.slice(0, 300)}\n`;
+        }
+        if (proposals.prioritised?.selected_problem) {
+          briefing += `  Problem: ${proposals.prioritised.selected_problem}\n`;
+        }
+        if (proposals.synthesis?.motion?.title) {
+          briefing += `  Motion: ${proposals.synthesis.motion.title}\n`;
+          if (proposals.synthesis.motion.hypothesis) {
+            briefing += `  Hypothesis: ${proposals.synthesis.motion.hypothesis.slice(0, 200)}\n`;
+          }
+        }
+        // Key dissent — show who opposed and why
+        const votes = typeof m.votes === 'string' ? JSON.parse(m.votes) : m.votes;
+        if (votes) {
+          const dissent = Object.entries(votes).filter(([, v]) => !v.support);
+          if (dissent.length > 0) {
+            briefing += `  Dissent: ${dissent.map(([id, v]) => `${id.toUpperCase()}: ${v.reasoning?.slice(0, 80) || 'opposed'}`).join(' | ')}\n`;
+          }
+        }
+      }
+      if (m.follow_up_target) {
+        briefing += `  Follow-up: ${m.follow_up_target}\n`;
+        briefing += `  Follow-up met: ${m.follow_up_met === true ? '✅ YES' : m.follow_up_met === false ? '❌ NO' : '⏳ NOT YET ASSESSED'}\n`;
+      }
+    }
+  }
+  
+  // Older meetings — compressed 50-word digests
+  if (chain.digests.length > 0) {
+    briefing += `\n📜 MEETING ARCHIVE (older than 24h, compressed):\n`;
+    for (const m of chain.digests) {
+      const digest = m.digest || `${m.decision || 'No decision'}`;
+      briefing += `  #${m.round_number} (${m.chair_id.toUpperCase()}, ${new Date(m.created_at).toLocaleDateString()}): ${digest.slice(0, 200)}\n`;
+    }
+    briefing += `  [Request full details of any meeting by number if relevant to current discussion]\n`;
+  }
+  
+  // Pending topic requests
+  if (chain.topicRequests.length > 0) {
+    briefing += `\n📋 PENDING TOPIC REQUESTS:\n`;
+    for (const t of chain.topicRequests) {
+      briefing += `  [${t.priority}] ${t.topic} (requested by ${t.requested_by.toUpperCase()}, ${new Date(t.created_at).toLocaleDateString()})\n`;
+      if (t.rationale) briefing += `    Rationale: ${t.rationale.slice(0, 120)}\n`;
+    }
+    briefing += `  [The chair should consider these when selecting the problem to address]\n`;
+  }
+  
+  // Research
+  if (ctx.recentResearch.length > 0) {
+    briefing += `\n🧪 RECENT RESEARCH:\n`;
+    for (const r of ctx.recentResearch.slice(0, 3)) {
+      briefing += `  ${r.report_type || r.research_type}: ${r.title || r.hypothesis || '(untitled)'}\n`;
+      if (r.findings) briefing += `    ${r.findings.slice(0, 200)}\n`;
+    }
+  }
+  
+  // Dead research
+  if (ctx.killedResearch.length > 0) {
+    briefing += `\n💀 DEAD RESEARCH (do NOT repeat):\n`;
+    for (const k of ctx.killedResearch.slice(0, 5)) {
+      briefing += `  ${k.hypothesis || k.research_type}: ${k.killed_reason || 'Killed by board vote'}\n`;
+    }
+  }
+  
+  // Active strategies
+  if (ctx.strategies.length > 0) {
+    briefing += `\n⚙ ACTIVE STRATEGIES:\n`;
+    for (const s of ctx.strategies) {
+      briefing += `  ${s.timeframe} ${s.type}: ${JSON.stringify(s.params || {}).slice(0, 100)}\n`;
+    }
+  }
+
+  // Completed backtest/analysis results
+  if (ctx.completedRequests?.length > 0) {
+    briefing += `\n📊 COMPLETED BACKTESTS & ANALYSES:\n`;
+    for (const r of ctx.completedRequests) {
+      briefing += `  [Meeting #${r.meeting_id}] ${r.description || r.request_type}:\n`;
+      briefing += `    ${(r.result_summary || 'No summary').split('\n').join('\n    ')}\n`;
+    }
+  }
+  if (ctx.pendingRequests?.length > 0) {
+    briefing += `\n⏳ PENDING REQUESTS: ${ctx.pendingRequests.length} awaiting execution\n`;
+  }
+
+
+  // ═══ v3: BTC FORECAST SECTION ═══
+  if (ctx.btcOhlc?.length > 0 || ctx.forecastRecord?.total > 0) {
+    briefing += `\n🔮 BTC 60-MIN FORECAST:\n`;
+    if (ctx.previousForecast) {
+      briefing += `  Previous: ${ctx.previousForecast.consensus_direction || 'NONE'} at $${parseFloat(ctx.previousForecast.btc_price_at_forecast || 0).toFixed(0)}\n`;
+    }
+    if (ctx.forecastRecord.total > 0) {
+      briefing += `  Track record: ${ctx.forecastRecord.correct}/${ctx.forecastRecord.total} (${((ctx.forecastRecord.correct/ctx.forecastRecord.total)*100).toFixed(0)}%)`;
+      if (ctx.forecastRecord.streak > 0) briefing += ` — ${ctx.forecastRecord.streak} streak`;
+      briefing += `\n`;
+    }
+    if (ctx.btcOhlc.length > 0) {
+      const last = ctx.btcOhlc[ctx.btcOhlc.length - 1];
+      const first = ctx.btcOhlc[0];
+      briefing += `  BTC 60-bar range: ${parseFloat(first.open).toFixed(0)} → ${parseFloat(last.close).toFixed(0)}\n`;
+    }
+    if (ctx.btcRegime) {
+      const r = ctx.btcRegime;
+      briefing += `  BTC regime: posInRange=${(r.posInRange60||0).toFixed(2)} vol=${r.volState||'?'} atr=${(r.atrCompression||0).toFixed(2)} hurst=${(r.hurst||0).toFixed(3)}\n`;
+    }
+  }
+
+  // ═══ v3: COMPETITION LEADERBOARD ═══
+  if (ctx.competitionLeaderboard?.length > 0) {
+    briefing += `\n🏆 COIN PICK COMPETITION:\n`;
+    for (const l of ctx.competitionLeaderboard) {
+      briefing += `  ${l.member_id.toUpperCase()}: ${l.entries} entries, ${l.evaluated} scored, avg=${l.avg_score ? parseFloat(l.avg_score).toFixed(2) : 'n/a'}\n`;
+    }
+  }
+  if (ctx.activeCompetitions?.length > 0) {
+    briefing += `  Active: ${ctx.activeCompetitions.map(c => `${c.member_id.toUpperCase()}→${c.coin}[${c.regime_factor_1},${c.regime_factor_2}]`).join(' | ')}\n`;
+  }
+
+  // ═══ v3: HERO CONTENT & USER FEEDBACK ═══
+  if (ctx.heroContent) {
+    briefing += `\n🎨 HERO (by ${ctx.heroContent.authored_by.toUpperCase()}): "${ctx.heroContent.headline}" 👍${ctx.heroContent.thumbs_up||0}/👎${ctx.heroContent.thumbs_down||0}\n`;
+  }
+  if (ctx.feedbackSummary?.length > 0) {
+    briefing += `👥 USER FEEDBACK: ${ctx.feedbackSummary.map(f => `${f.feature_type}#${f.feature_id}:👍${f.thumbs_up}👎${f.thumbs_down}`).join(' | ')}\n`;
+  }
+
+  // ═══ v3: LOW SIGNAL VOLUME PROMPT ═══
+  const passedRate = parseFloat(ctx.signalRate?.passed_per_hour || 0);
+  if (passedRate < 5 && passedRate > 0) {
+    briefing += `\n⚠ LOW SIGNAL VOLUME (${passedRate.toFixed(1)}/hr). Focus on: RESEARCH, COMPETITION, BACKTEST, CREATIVE, AFFIRM_PATIENCE\n`;
+  }
+
+  // ═══ COIN STRATEGY PERFORMANCE REPORT ═══
+  try {
+    briefing += coinStrategyManager.formatCoinStrategyPerformanceReport(ctx.coinStrategyReport);
+  } catch (err) {
+    briefing += `\n📊 COIN STRATEGY PERFORMANCE: Error loading report.\n`;
+  }
+
+  // ═══ COIN UNIVERSE REVIEW — One coin per meeting ═══
+  try {
+    briefing += coinStrategyManager.formatCoinReviewBriefing(ctx.nextCoinForReview);
+  } catch (err) {
+    briefing += `\n🔬 COIN UNIVERSE REVIEW: Error loading review data.\n`;
+  }
+
+  // Available actions reminder
+  briefing += `\n🔧 AVAILABLE ACTIONS:\n`;
+  briefing += `  • DEPLOY_COIN_STRATEGY — Create a NEW parallel signal loop for a coin (ADDS signals, not a filter) [5/5 unanimous required]\n`;
+  briefing += `  • COIN_NO_ACTION — Mark coin as reviewed, no strategy needed [auto-deploys]\n`;
+  briefing += `  • DEACTIVATE_COIN_STRATEGY — Deactivate an existing coin strategy [auto-deploys]\n`;
+  briefing += `  • ADD_REGIME_FILTER — Deploy a new signal filter [auto-deploys, respects maturity locks]\n`;
+  briefing += `  • AFFIRM_PATIENCE — Formally vote to wait and gather more data [auto-deploys]\n`;
+  briefing += `  • EDIT_HERO — Update home page hero section (chair's turn) [auto-deploys]\n`;
+  briefing += `  • COMPETITION_ENTRY — Submit coin pick with novel regime factors [auto-deploys]\n`;
+  briefing += `  • REMOVE_REGIME_FILTER — Disable an existing filter by ID [auto-deploys]\n`;
+  briefing += `  • MODIFY_REGIME_FILTER — Change conditions on an existing filter [auto-deploys]\n`;
+  briefing += `  • EXCLUDE_COIN / INCLUDE_COIN — Block or unblock specific coins [⚠ REQUIRES HUMAN APPROVAL + SUPERMAJORITY 4/5]\n`;
+  briefing += `  • REQUEST_BACKTEST — Ask for a historical comparison [auto-runs]\n`;
+  briefing += `  • REQUEST_ANALYSIS — Ask for custom data analysis [auto-runs]\n`;
+  briefing += `  • NEW_REGIME_FEATURE / KILL_RESEARCH — Manage research pipeline\n`;
+  briefing += `  • STRATEGY_PARAMETER — Change strategy parameters [⚠ REQUIRES HUMAN APPROVAL + SUPERMAJORITY 4/5]\n`;
+  briefing += `  • EMERGENCY_HALT — Stop all signal generation [⚠ REQUIRES HUMAN APPROVAL + SUPERMAJORITY 4/5]\n`;
+  briefing += `\n⚠ GUARDRAILS: Excluding coins, changing strategy params, and emergency halts are QUEUED for human approval.\n`;
+  briefing += `  They are NOT deployed automatically even if the vote passes. Focus on FILTERS and BACKTESTS which you control directly.\n`;
+  
+  return briefing;
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// MEETING ENGINE — 8-Phase Protocol
+// ═══════════════════════════════════════════════════════════════
+
+async function runBoardMeeting() {
+  const meetingStart = Date.now();
+  const client = await pool.connect();
+  
+  try {
+    await ensureTables(client);
+    
+    // DEDUP GUARD: Skip if a meeting completed or started within the last 30 minutes
+    // (bypassed for manual triggers)
+    if (!manualTrigger) {
+      const { rows: recentMeetings } = await client.query(
+        `SELECT id, round_number, phase, created_at FROM board_meetings 
+         WHERE created_at > now() - interval '30 minutes' 
+         ORDER BY created_at DESC LIMIT 1`
+      );
+      if (recentMeetings.length > 0) {
+        const minutesAgo = (Date.now() - new Date(recentMeetings[0].created_at).getTime()) / 60000;
+        console.log(`[board] ⏭ Skipping — meeting #${recentMeetings[0].round_number} (${recentMeetings[0].phase}) ran ${minutesAgo.toFixed(0)}min ago. Next meeting after 30min gap.`);
+        return { skipped: true, reason: `Meeting #${recentMeetings[0].round_number} ran ${minutesAgo.toFixed(0)}min ago` };
+      }
+    } else {
+      console.log(`[board] ⚡ Manual trigger — skipping dedup guard`);
+    }
+    
+    const { rows: lastMeeting } = await client.query(
+      `SELECT round_number FROM board_meetings ORDER BY round_number DESC LIMIT 1`
+    );
+    const roundNumber = (lastMeeting[0]?.round_number || 0) + 1;
+    const chairIdx = (roundNumber - 1) % BOARD_MEMBERS.length;
+    const chair = BOARD_MEMBERS[chairIdx];
+    const otherMembers = BOARD_MEMBERS.filter(m => m.id !== chair.id);
+    
+    console.log(`\n${'═'.repeat(70)}`);
+    console.log(`  BOARD MEETING #${roundNumber} — Chair: ${chair.name} (${chair.role})`);
+    console.log(`  ${new Date().toISOString()}`);
+    console.log(`${'═'.repeat(70)}\n`);
+    
+    // Build context
+    let context, briefingText;
+    try {
+      context = await buildMeetingContext(client);
+      briefingText = formatBriefing(context);
+    } catch (ctxErr) {
+      console.error(`[board] ❌ Context/briefing build failed:`, ctxErr.message, ctxErr.stack);
+      // Update meeting as failed
+      try {
+        await client.query(
+          `UPDATE board_meetings SET phase = 'failed', decision = $1, duration_ms = $2 WHERE round_number = $3`,
+          [`Context build error: ${ctxErr.message}`, Date.now() - meetingStart, roundNumber]
+        );
+      } catch {}
+      return { error: `Context build failed: ${ctxErr.message}` };
+    }
+    
+    // Log briefing excerpt so we can verify data flow
+    console.log(`\n── BRIEFING EXCERPT ──`);
+    console.log(briefingText.slice(0, 1500));
+    console.log(`── (${briefingText.length} chars total) ──\n`);
+    
+    // Create meeting record (store briefing text, not full context object — avoids serialization issues)
+    let meetingId;
+    try {
+      const { rows: [meeting] } = await client.query(
+        `INSERT INTO board_meetings (round_number, chair_id, phase, context)
+         VALUES ($1, $2, 'started', $3) RETURNING id`,
+        [roundNumber, chair.id, JSON.stringify({ briefingLength: briefingText.length, timestamp: context.timestamp })]
+      );
+      meetingId = meeting.id;
+    } catch (insertErr) {
+      console.error(`[board] ❌ Failed to create meeting row:`, insertErr.message);
+      return { error: `Meeting insert failed: ${insertErr.message}` };
+    }
+    let totalTokens = 0;
+
+    // Build the system prompt (genesis + personality)
+    const memberSystem = (m) => `${GENESIS_DOCUMENT}\n\nYOUR ROLE: ${m.name} — ${m.role}\n${m.personality}\n\nYou are in Board Meeting #${roundNumber}. Respond with valid JSON only.`;
+
+    // ─── PHASE 1: SITUATIONAL AWARENESS (Chair) ───
+    console.log(`[Phase 1] ${chair.name} reviews situation...\n`);
+    
+    const p1Resp = await callLLM(chair, memberSystem(chair), `
+You are chairing this meeting. Here is the full briefing:
+
+${briefingText}
+
+PHASE 1 — SITUATIONAL AWARENESS. Summarise the key points in 3-5 sentences.
+Focus on: data maturity status, any filters approaching decision-readiness,
+regime conditions, and what changed since last meeting.
+
+CRITICAL: Check the maturity scores FIRST. If no filters are decision-ready,
+note this prominently — the board's main job may be patience, research, or creative work.
+
+Respond as JSON:
+{
+  "situation_summary": "Your 3-5 sentence summary",
+  "key_changes": ["change 1", "change 2", ...],
+  "concerning_patterns": ["pattern 1", ...],
+  "data_maturity_note": "Summary of which filters are/aren't decision-ready",
+  "recommended_focus": "filters|research|competition|patience|creative"
+}`, 800);
+    totalTokens += p1Resp.tokens;
+    const p1 = parseJSON(p1Resp.text) || { situation_summary: p1Resp.text };
+    console.log(`  Summary: ${(p1.situation_summary || '').slice(0, 200)}...\n`);
+
+    // ─── PHASE 2: PROBLEM IDENTIFICATION (All members) ───
+    console.log(`[Phase 2] All members identify problems...\n`);
+    
+    const problemPromises = otherMembers.map(m => callLLM(m, memberSystem(m), `
+CHAIR'S SITUATION SUMMARY: ${p1.situation_summary || p1Resp.text}
+
+KEY CHANGES: ${JSON.stringify(p1.key_changes || [])}
+
+FULL BRIEFING DATA:
+${briefingText}
+
+PHASE 2 — PROBLEM IDENTIFICATION. As ${m.name} (${m.role}), identify 1-3 problems.
+
+BEFORE IDENTIFYING PROBLEMS: Check the maturity status of all active filters.
+If no filter has reached 2000+ evaluated signals AND 72+ hours, the correct
+answer may be "insufficient data to evaluate our existing decisions."
+This is a VALID and IMPORTANT problem that can lead to AFFIRM_PATIENCE.
+
+Consider problems in ALL areas: filters, research gaps, competition opportunities,
+hero section, BTC forecast accuracy, signal volume, regime analysis.
+
+You may also request topics for future meetings.
+
+Respond as JSON:
+{
+  "problems": [
+    { "title": "Short name", "severity": "HIGH/MEDIUM/LOW", "evidence": "Data supporting this is a problem" }
+  ],
+  "requested_topics": [
+    { "topic": "Topic for future meeting", "rationale": "Why this matters", "priority": "HIGH/NORMAL/LOW" }
+  ]
+}`, 500));
+    
+    const problemResponses = await Promise.all(problemPromises);
+    const allProblems = [];
+    const allTopicRequests = [];
+    for (let i = 0; i < otherMembers.length; i++) {
+      totalTokens += problemResponses[i].tokens;
+      const parsed = parseJSON(problemResponses[i].text);
+      const problems = parsed?.problems || [{ title: problemResponses[i].text.slice(0, 100), severity: 'MEDIUM', evidence: '' }];
+      for (const p of problems) {
+        allProblems.push({ ...p, identified_by: otherMembers[i].id });
+      }
+      // Collect topic requests
+      if (parsed?.requested_topics) {
+        for (const t of parsed.requested_topics) {
+          allTopicRequests.push({ ...t, requested_by: otherMembers[i].id });
+        }
+      }
+      console.log(`  ${otherMembers[i].name}: ${problems.map(p => p.title).join(', ')}`);
+      if (parsed?.requested_topics?.length) {
+        console.log(`    📋 Topics: ${parsed.requested_topics.map(t => t.topic).join(', ')}`);
+      }
+    }
+    console.log();
+
+    // ─── PHASE 3: PROBLEM PRIORITISATION (Chair) ───
+    console.log(`[Phase 3] ${chair.name} selects the key problem...\n`);
+    
+    const p3Resp = await callLLM(chair, memberSystem(chair), `
+ALL IDENTIFIED PROBLEMS:
+${JSON.stringify(allProblems, null, 2)}
+
+${allTopicRequests.length > 0 ? `NEW TOPIC REQUESTS FROM THIS MEETING:\n${JSON.stringify(allTopicRequests, null, 2)}\n` : ''}
+${(context.meetingChain?.topicRequests || []).length > 0 ? `PENDING TOPIC REQUESTS FROM PREVIOUS MEETINGS:\n${JSON.stringify(context.meetingChain.topicRequests, null, 2)}\n` : ''}
+
+PHASE 3 — PRIORITISATION. You must select THE SINGLE MOST IMPORTANT problem
+to address this meeting. Consider severity, urgency, and data support.
+You may also select a pending topic request if it's more urgent than new problems.
+
+Respond as JSON:
+{
+  "selected_problem": "Title of the chosen problem",
+  "rationale": "Why this is the most important one to address now",
+  "deferred": ["Problem titles that can wait"]
+}`, 500);
+    totalTokens += p3Resp.tokens;
+    const p3 = parseJSON(p3Resp.text) || { selected_problem: allProblems[0]?.title || 'No problems identified' };
+    console.log(`  Selected: ${p3.selected_problem}\n`);
+
+    // ─── PHASE 4: SOLUTION DISCUSSION (All members) ───
+    console.log(`[Phase 4] All members propose solutions...\n`);
+    
+    const solutionPromises = BOARD_MEMBERS.map(m => callLLM(m, memberSystem(m), `
+THE PROBLEM TO SOLVE: ${p3.selected_problem}
+Rationale: ${p3.rationale || ''}
+
+CONTEXT:
+${briefingText.slice(0, 6000)}
+
+PHASE 4 — SOLUTION DISCUSSION. As ${m.name} (${m.role}), propose your solution.
+AVAILABLE MOTION TYPES (pick the most appropriate):
+  • ADD_REGIME_FILTER / REMOVE / MODIFY — For filter changes (only if maturity allows)
+  • DEPLOY_COIN_STRATEGY — Create a NEW parallel signal loop for a specific coin (NOT a filter — this ADDS signals). Requires 5/5 UNANIMOUS. Provide symbol, timeframe, rationale with OOS Sharpe/trades/rho evidence. Do NOT include filter_conditions or blocking rules.
+  • COIN_NO_ACTION — Mark today's reviewed coin as "no action needed"
+  • DEACTIVATE_COIN_STRATEGY — Deactivate an existing coin strategy
+  • AFFIRM_PATIENCE — To formally vote to wait and gather more data
+  • EDIT_HERO — To update the home page hero section (creative)
+  • COMPETITION_ENTRY — To submit a coin pick with novel regime factors
+  • REQUEST_BACKTEST / REQUEST_ANALYSIS — For historical analysis
+  • NEW_REGIME_FEATURE / KILL_RESEARCH — For research pipeline
+  • EXCLUDE_COIN / INCLUDE_COIN — For coin management [needs human approval]
+
+Respond as JSON:
+{
+  "solution": "Your proposed solution in plain English",
+  "motion_type": "One of the types above",
+  "implementation": { "feature": "...", "conditions": {}, "timeframe": "1h or 1m or 1d or all", "details": "..." },
+  "hypothesis": "What you expect this to achieve",
+  "success_metric": "How to measure success",
+  "concerns": "Any downsides or risks"
+}`, 800));
+    
+    const solutionResponses = await Promise.all(solutionPromises);
+    const solutions = [];
+    for (let i = 0; i < BOARD_MEMBERS.length; i++) {
+      totalTokens += solutionResponses[i].tokens;
+      const parsed = parseJSON(solutionResponses[i].text) || { solution: solutionResponses[i].text };
+      solutions.push({ member_id: BOARD_MEMBERS[i].id, ...parsed });
+      console.log(`  ${BOARD_MEMBERS[i].name}: ${(parsed.solution || '').slice(0, 120)}`);
+    }
+    console.log();
+
+    // ─── Chair synthesises a single motion from solutions ───
+    console.log(`[Phase 4b] ${chair.name} synthesises solutions into one motion...\n`);
+    
+    const synthesisResp = await callLLM(chair, memberSystem(chair), `
+ALL PROPOSED SOLUTIONS:
+${JSON.stringify(solutions, null, 2)}
+
+THE PROBLEM: ${p3.selected_problem}
+
+As chair, synthesise the best solution into ONE formal motion for a vote.
+Take the strongest ideas and combine them. The motion must be specific and implementable.
+IMPORTANT: The motion title MUST include which signal timeframe(s) it applies to (e.g. "1H signals", "1M signals", "All timeframes").
+
+Respond as JSON:
+{
+  "motion": {
+    "title": "Short title including timeframe (e.g. 'Block bottom-range longs on 1H signals')",
+    "type": "One of the MOTION_TYPES",
+    "details": { "timeframe": "1h or 1m or 1d or all", ... implementation details ... },
+    "hypothesis": "Expected outcome",
+    "success_metric": "How to measure"
+  },
+  "rationale": "Why this combines the best ideas"
+}`, 1000);
+    totalTokens += synthesisResp.tokens;
+    const synthesis = parseJSON(synthesisResp.text) || { motion: solutions[0] };
+    console.log(`  Motion: ${synthesis.motion?.title || 'Unnamed'}\n`);
+
+    // ─── PHASE 5: VOTE ───
+    console.log(`[Phase 5] Voting...\n`);
+    
+    const votePromises = BOARD_MEMBERS.map(m => callLLM(m, memberSystem(m), `
+FORMAL MOTION: ${JSON.stringify(synthesis.motion, null, 2)}
+
+THE PROBLEM: ${p3.selected_problem}
+CHAIR'S RATIONALE: ${synthesis.rationale || ''}
+
+PHASE 5 — VOTE. As ${m.name} (${m.role}), cast your vote.
+
+Respond as JSON:
+{
+  "support": true/false,
+  "reasoning": "Why you support or oppose (1-2 sentences)",
+  "conditions": "Any conditions for your support (or null)"
+}`, 300));
+
+    const voteResponses = await Promise.all(votePromises);
+    const votes = {};
+    for (let i = 0; i < BOARD_MEMBERS.length; i++) {
+      totalTokens += voteResponses[i].tokens;
+      const parsed = parseJSON(voteResponses[i].text) || { support: false, reasoning: voteResponses[i].text };
+      votes[BOARD_MEMBERS[i].id] = { support: !!parsed.support, role: BOARD_MEMBERS[i].role, reasoning: parsed.reasoning, conditions: parsed.conditions };
+      console.log(`  ${BOARD_MEMBERS[i].name}: ${parsed.support ? '✅ SUPPORT' : '❌ OPPOSE'} — ${(parsed.reasoning || '').slice(0, 100)}`);
+    }
+    
+    const supportCount = Object.values(votes).filter(v => v.support).length;
+    const totalVotes = Object.values(votes).length;
+    const motionType = synthesis.motion?.type || 'UNKNOWN';
+    const requiresUnanimous = ['DEPLOY_COIN_STRATEGY'].includes(motionType);
+    const requiresSupermajority = ['EMERGENCY_HALT', 'KILL_RESEARCH', 'EXCLUDE_COIN', 'INCLUDE_COIN', 'STRATEGY_PARAMETER'].includes(motionType);
+    const threshold = requiresUnanimous ? totalVotes : requiresSupermajority ? Math.ceil(totalVotes * 4 / 5) : Math.ceil(totalVotes / 2 + 0.1);
+    const passed = supportCount >= threshold;
+    
+    if (requiresUnanimous && !passed) {
+      console.log(`\n  Result: ${supportCount}/${totalVotes} → ❌ FAILED (needed ${threshold}/${totalVotes} UNANIMOUS for ${motionType})\n`);
+    } else if (requiresSupermajority && !passed) {
+      console.log(`\n  Result: ${supportCount}/${totalVotes} → ❌ FAILED (needed ${threshold} for supermajority on ${motionType})\n`);
+    } else {
+      console.log(`\n  Result: ${supportCount}/${totalVotes} → ${passed ? '✅ PASSED' : '❌ FAILED'}\n`);
+    }
+
+    const decision = `${passed ? 'PASSED' : 'FAILED'} (${supportCount}/${totalVotes}): ${synthesis.motion?.title || 'Unnamed'}`;
+
+    // ─── PHASE 6: IMPLEMENTATION ───
+    let deployed = false;
+    if (passed && synthesis.motion) {
+      console.log(`[Phase 6] Deploying...\n`);
+      try {
+        // Attach vote info for the approval queue
+        synthesis.motion._supportCount = supportCount;
+        synthesis.motion._totalVotes = totalVotes;
+        deployed = await deployMotion(client, synthesis.motion, chair.id, meetingId, roundNumber);
+      } catch (err) {
+        console.error(`  ❌ Deploy error: ${err.message}`);
+      }
+    }
+
+    // ─── PHASE 7: FOLLOW-UP TARGET ───
+    console.log(`[Phase 7] ${chair.name} sets follow-up target...\n`);
+    
+    const p7Resp = await callLLM(chair, memberSystem(chair), `
+Meeting decision: ${decision}
+Deployed: ${deployed}
+Problem addressed: ${p3.selected_problem}
+
+PHASE 7 — Set a specific, measurable follow-up target for the next meeting.
+What should the board check at the start of the next meeting to evaluate
+whether this meeting's decision was effective?
+
+Respond as JSON:
+{
+  "follow_up_target": "Specific measurable target (e.g. 'Check if filtered signal SR > unfiltered SR over the next hour')",
+  "how_to_measure": "What data to look at"
+}`, 300);
+    totalTokens += p7Resp.tokens;
+    const p7 = parseJSON(p7Resp.text) || { follow_up_target: 'Review impact at next meeting' };
+    console.log(`  Target: ${p7.follow_up_target}\n`);
+
+
+    // ═══ BTC 60-MINUTE FORECAST (v3) ═══
+    console.log(`[BTC Forecast] All members predict BTC direction...\n`);
+    
+    let btcForecastData = null;
+    if (context.btcOhlc.length >= 3) {
+      // Build BTC data summary for the LLMs
+      const btcBars = context.btcOhlc;
+      const lastPrice = parseFloat(btcBars[btcBars.length - 1]?.close || 0);
+      const btcSummary = [
+        `BTC Current Price: $${lastPrice.toFixed(0)}`,
+        `Last 10 bars (1H OHLC):`,
+        ...btcBars.slice(-10).map(b => {
+          const t = new Date(b.timestamp).toISOString().slice(11, 16);
+          return `  ${t}: O${parseFloat(b.open).toFixed(0)} H${parseFloat(b.high).toFixed(0)} L${parseFloat(b.low).toFixed(0)} C${parseFloat(b.close).toFixed(0)}`;
+        }),
+      ];
+      if (context.btcRegime) {
+        const r = context.btcRegime;
+        btcSummary.push(`BTC Regime: posInRange=${(r.posInRange60||0).toFixed(2)} vol=${r.volState||'?'} atr=${(r.atrCompression||0).toFixed(2)}`);
+        btcSummary.push(`  trend=${(r.trend60||0).toFixed(2)} persistence=${(r.persistence60||0).toFixed(2)} hurst=${(r.hurst||0).toFixed(3)} regime=${r.regime||'?'}`);
+      }
+      if (context.forecastRecord.total > 0) {
+        btcSummary.push(`Track record: ${context.forecastRecord.correct}/${context.forecastRecord.total} (${((context.forecastRecord.correct/context.forecastRecord.total)*100).toFixed(0)}%)`);
+      }
+
+      const forecastPromises = BOARD_MEMBERS.map(m => callLLM(m, memberSystem(m), `
+BTC 60-MINUTE FORECAST. Predict BTC direction for the next hour.
+
+${btcSummary.join('\n')}
+
+You MUST justify your prediction using the regime data above, not gut feeling.
+Consider: posInRange (where in the range is BTC?), volatility state, trend, persistence, hurst.
+
+Respond as JSON:
+{
+  "direction": "UP" or "DOWN",
+  "confidence": "LOW" or "MEDIUM" or "HIGH",
+  "reasoning": "2-3 sentences citing specific regime values"
+}`, 300));
+
+      const forecastResponses = await Promise.all(forecastPromises);
+      const forecasts = {};
+      let upVotes = 0, downVotes = 0;
+      
+      for (let i = 0; i < BOARD_MEMBERS.length; i++) {
+        totalTokens += forecastResponses[i].tokens;
+        const parsed = parseJSON(forecastResponses[i].text) || { direction: 'UP', confidence: 'LOW', reasoning: forecastResponses[i].text };
+        const dir = (parsed.direction || '').toUpperCase() === 'DOWN' ? 'DOWN' : 'UP';
+        forecasts[BOARD_MEMBERS[i].id] = { direction: dir, confidence: parsed.confidence || 'LOW', reasoning: parsed.reasoning || '' };
+        if (dir === 'UP') upVotes++; else downVotes++;
+        console.log(`  ${BOARD_MEMBERS[i].name}: ${dir} (${parsed.confidence || 'LOW'}) — ${(parsed.reasoning || '').slice(0, 80)}`);
+      }
+
+      const consensus = upVotes >= downVotes ? 'UP' : 'DOWN';
+      console.log(`\n  Consensus: ${consensus} (${upVotes} UP / ${downVotes} DOWN)\n`);
+
+      // Save forecast
+      try {
+        await client.query(`
+          INSERT INTO board_btc_forecasts 
+            (meeting_id, round_number, btc_price_at_forecast, consensus_direction, individual_forecasts, regime_snapshot)
+          VALUES ($1, $2, $3, $4, $5, $6)`,
+          [meetingId, roundNumber, lastPrice, consensus, JSON.stringify(forecasts), 
+           context.btcRegime ? JSON.stringify(context.btcRegime) : null]
+        );
+      } catch (err) {
+        console.warn(`  ⚠ Failed to save BTC forecast: ${err.message}`);
+      }
+
+      btcForecastData = { consensus, upVotes, downVotes, forecasts, price: lastPrice };
+    } else {
+      console.log(`  ⏭ Skipping forecast — insufficient BTC data (${context.btcOhlc.length} bars)\n`);
+    }
+
+    // ═══ SCORE PREVIOUS BTC FORECAST ═══
+    if (context.previousForecast && context.btcOhlc.length > 0) {
+      const pf = context.previousForecast;
+      const currentPrice = parseFloat(context.btcOhlc[context.btcOhlc.length - 1]?.close || 0);
+      if (currentPrice > 0 && pf.btc_price_at_forecast > 0) {
+        const actualDirection = currentPrice > pf.btc_price_at_forecast ? 'UP' : 'DOWN';
+        const changePct = ((currentPrice - pf.btc_price_at_forecast) / pf.btc_price_at_forecast * 100);
+        const consensusCorrect = pf.consensus_direction === actualDirection;
+        try {
+          await client.query(
+            `UPDATE board_btc_forecasts SET btc_price_at_review = $1, actual_direction = $2, actual_change_pct = $3, consensus_correct = $4, reviewed_at = now() WHERE id = $5`,
+            [currentPrice, actualDirection, changePct, consensusCorrect, pf.id]
+          );
+          console.log(`  📊 Previous forecast scored: ${pf.consensus_direction} → ${actualDirection} (${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%) — ${consensusCorrect ? '✅' : '❌'}`);
+        } catch {}
+      }
+    }
+
+    // ─── SAVE ───
+    const durationMs = Date.now() - meetingStart;
+
+    // ═══ MANDATORY: HERO SECTION EDIT (Chair's turn) ═══
+    console.log(`[Hero Edit] ${chair.name} proposes homepage content...\n`);
+    let heroEditData = null;
+    try {
+      const currentHero = context.heroContent;
+      const heroPrompt = currentHero && currentHero.id > 0
+        ? `Current hero (by ${currentHero.authored_by}): badge="${currentHero.badge_text}" headline="${currentHero.headline}" sub="${currentHero.subheadline}" body="${currentHero.body_text}" | Feedback: 👍${currentHero.thumbs_up||0} 👎${currentHero.thumbs_down||0}`
+        : `No hero has been set yet — you are the first to write it!`;
+
+      const heroResp = await callLLM(chair, memberSystem(chair), `
+MANDATORY TASK: You are editing the NTLGNC Signal Lab homepage hero section.
+This is the public-facing homepage at ntlgnc.com that real users see.
+
+${heroPrompt}
+
+Live performance data you may reference:
+- 24h cumulative: ${context.aggregate24h?.total_return || '?'}%
+- Trades: ${context.aggregate24h?.total_closed || '?'} closed
+- Win rate: ${context.aggregate24h ? ((context.aggregate24h.total_wins / context.aggregate24h.total_closed) * 100).toFixed(1) : '?'}%
+- Active filters: ${context.filterImpact?.length || 0}
+- Board meetings: ${context.meetingChain?.recent?.length || 0} in last 24h
+- Market regime: ${context.liveRegime?.byTimeframe?.['1h']?.aggregate?.marketMood || 'compressed'}
+
+Write compelling, data-driven copy. Be creative. Reference real numbers.
+The hero section has these fields with CHARACTER LIMITS:
+
+Respond as JSON:
+{
+  "badge_text": "max 30 chars — e.g. 'LIVE — 147 trades today'",
+  "headline": "max 40 chars — the big headline",
+  "subheadline": "max 60 chars — italic tagline",
+  "body_text": "max 250 chars — the pitch paragraph",
+  "cta_left": "max 25 chars — primary button",
+  "cta_right": "max 25 chars — secondary button",
+  "creative_rationale": "Why you chose this angle"
+}`, 400);
+      totalTokens += heroResp.tokens;
+      const heroParsed = parseJSON(heroResp.text);
+      if (heroParsed && heroParsed.headline) {
+        // Enforce character limits
+        const h = {
+          badge_text: (heroParsed.badge_text || 'LIVE — Signals firing now').slice(0, 30),
+          headline: (heroParsed.headline || 'Recursive AI Alpha').slice(0, 40),
+          subheadline: (heroParsed.subheadline || '').slice(0, 60),
+          body_text: (heroParsed.body_text || '').slice(0, 250),
+          cta_left: (heroParsed.cta_left || 'View Live Signals').slice(0, 25),
+          cta_right: (heroParsed.cta_right || 'See the Evidence').slice(0, 25),
+        };
+        // Deactivate previous hero
+        await client.query(`UPDATE board_hero_content SET active = false WHERE active = true`);
+        await client.query(
+          `INSERT INTO board_hero_content 
+           (meeting_id, authored_by, badge_text, headline, subheadline, body_text, cta_left, cta_right, active)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true)`,
+          [meetingId, chair.id, h.badge_text, h.headline, h.subheadline, h.body_text, h.cta_left, h.cta_right]
+        );
+        heroEditData = h;
+        console.log(`  ✅ Hero updated by ${chair.name}: "${h.headline}" / "${h.subheadline}"`);
+        console.log(`     Badge: "${h.badge_text}" | CTAs: [${h.cta_left}] [${h.cta_right}]`);
+        console.log(`     Rationale: ${(heroParsed.creative_rationale || '').slice(0, 100)}\n`);
+      } else {
+        console.log(`  ⚠ Could not parse hero response from ${chair.name}\n`);
+      }
+    } catch (err) {
+      console.warn(`  ⚠ Hero edit phase failed: ${err.message}\n`);
+    }
+    
+    await client.query(
+      `UPDATE board_meetings 
+       SET phase = 'complete', 
+           proposals = $1, debate = $2, votes = $3, decision = $4,
+           motion_type = $5, motion_details = $6, deployed = $7,
+           follow_up_target = $8, duration_ms = $9, total_tokens = $10
+       WHERE id = $11`,
+      [
+        JSON.stringify({ 
+          situation: p1, 
+          problems: allProblems, 
+          prioritised: p3, 
+          solutions, 
+          synthesis,
+          follow_up: p7 
+        }),
+        JSON.stringify(solutions),
+        JSON.stringify(votes),
+        decision,
+        motionType,
+        JSON.stringify(synthesis.motion?.details || {}),
+        deployed,
+        p7.follow_up_target,
+        durationMs,
+        totalTokens,
+        meetingId,
+      ]
+    );
+
+    // Also log to research_log
+    try {
+      await client.query(`
+        INSERT INTO research_log (
+          report_type, title, findings, recommendations, 
+          evolution_round, committee_decision, active_filters
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `, [
+        'board_meeting',
+        `Board #${roundNumber} · ${chair.name} · ${passed ? '✅' : '❌'} ${synthesis.motion?.title || 'No motion'}`,
+        `Problem: ${p3.selected_problem}\n\nSituation: ${p1.situation_summary || ''}\n\nSolutions:\n${solutions.map(s => `${s.member_id}: ${s.solution}`).join('\n')}\n\nVotes: ${supportCount}/${totalVotes}\nFollow-up: ${p7.follow_up_target}`,
+        synthesis.motion?.hypothesis || '',
+        roundNumber,
+        decision,
+        JSON.stringify(context.filterImpact),
+      ]);
+    } catch {}
+    
+    // ─── GENERATE 50-WORD DIGEST ───
+    // Compressed summary for the meeting archive chain
+    const digest = [
+      `Problem: ${(p3.selected_problem || '').slice(0, 60)}.`,
+      `Motion: ${(synthesis.motion?.title || 'None').slice(0, 50)}.`,
+      `${passed ? 'PASSED' : 'FAILED'} ${supportCount}/${totalVotes}.`,
+      `${deployed ? 'Deployed.' : ''}`,
+      `Key dissent: ${Object.entries(votes).filter(([,v]) => !v.support).map(([id]) => id.toUpperCase()).join(',') || 'none'}.`,
+      `Target: ${(p7.follow_up_target || 'none').slice(0, 60)}.`,
+    ].join(' ').slice(0, 250);
+    
+    try {
+      await client.query(`UPDATE board_meetings SET digest = $1 WHERE id = $2`, [digest, meetingId]);
+    } catch {}
+    
+    // ─── STORE TOPIC REQUESTS ───
+    if (allTopicRequests.length > 0) {
+      for (const t of allTopicRequests) {
+        try {
+          await client.query(
+            `INSERT INTO board_topic_requests (requested_by, meeting_id, topic, rationale, priority)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [t.requested_by, meetingId, t.topic, t.rationale || '', t.priority || 'NORMAL']
+          );
+          console.log(`  📋 Topic queued: "${t.topic}" by ${t.requested_by}`);
+        } catch {}
+      }
+    }
+    
+    // Mark any addressed topic requests as handled
+    if (context.meetingChain?.topicRequests?.length > 0) {
+      // If the selected problem matches a topic request, mark it addressed
+      for (const tr of context.meetingChain.topicRequests) {
+        if (p3.selected_problem && (
+          p3.selected_problem.toLowerCase().includes(tr.topic.toLowerCase().slice(0, 20)) ||
+          tr.topic.toLowerCase().includes(p3.selected_problem.toLowerCase().slice(0, 20))
+        )) {
+          try {
+            await client.query(
+              `UPDATE board_topic_requests SET status = 'addressed', addressed_in = $1 WHERE id = $2`,
+              [meetingId, tr.id]
+            );
+            console.log(`  ✅ Topic request #${tr.id} marked as addressed`);
+          } catch {}
+        }
+      }
+    }
+    
+    console.log(`${'═'.repeat(70)}`);
+    console.log(`  Meeting #${roundNumber} complete in ${(durationMs / 1000).toFixed(1)}s`);
+    console.log(`  Tokens: ${totalTokens} · Decision: ${decision}`);
+    console.log(`  Deployed: ${deployed} · Follow-up: ${p7.follow_up_target?.slice(0, 80)}`);
+    console.log(`${'═'.repeat(70)}\n`);
+    
+    return { roundNumber, chair: chair.name, decision, deployed, durationMs, totalTokens,
+             votes: { support: supportCount, total: totalVotes }, motion: synthesis.motion, followUp: p7 };
+  } catch (err) {
+    console.error(`[board] ❌ Meeting failed:`, err.message, err.stack);
+    return { error: err.message };
+  } finally {
+    client.release();
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// BACKTEST EXECUTOR — Runs filter comparisons on historical data
+// ═══════════════════════════════════════════════════════════════
+
+async function executeBacktest(client, params, meetingId) {
+  const tfMap = { '1m': 1, '1h': 60, '1d': 1440, 'all': null };
+  const lookbackDays = params.lookback_days || 7;
+  const barMinutes = tfMap[params.timeframe] || null;
+
+  console.log(`  [Backtest] Running: ${params.description || 'comparison'} (${lookbackDays}d lookback, ${params.timeframe || 'all'} signals)`);
+
+  // Get historical closed signals
+  let query = `
+    SELECT s.id, s.symbol, s.direction, s."entryPrice", s."exitPrice",
+           s."returnPct", s.status, s."createdAt", s."closedAt",
+           s."holdBars", st."barMinutes"
+    FROM "FracmapSignal" s
+    JOIN "FracmapStrategy" st ON s."strategyId" = st.id
+    WHERE s.status = 'closed' AND s."returnPct" IS NOT NULL
+      AND s."createdAt" > now() - interval '${lookbackDays} days'
+  `;
+  if (barMinutes) query += ` AND st."barMinutes" = ${barMinutes}`;
+  query += ` ORDER BY s."createdAt"`;
+
+  const { rows: signals } = await client.query(query);
+  if (signals.length === 0) {
+    const result = { error: 'No signals found for the given parameters', signals_count: 0 };
+    await client.query(
+      `UPDATE board_requests SET status = 'completed', completed_at = now(), result = $1, 
+              result_summary = 'No signals found' WHERE meeting_id = $2 AND status = 'pending'`,
+      [JSON.stringify(result), meetingId]
+    );
+    return result;
+  }
+
+  // Compute baseline stats (all signals, no filter)
+  const computeStats = (sigs) => {
+    if (sigs.length === 0) return { count: 0, avgReturn: 0, totalReturn: 0, winRate: 0, sharpe: 0, wins: 0, losses: 0, bestTrade: 0, worstTrade: 0 };
+    const rets = sigs.map(s => parseFloat(s.returnPct) || 0);
+    const wins = rets.filter(r => r > 0).length;
+    const total = rets.reduce((a, b) => a + b, 0);
+    const mean = total / rets.length;
+    const std = rets.length > 1 ? Math.sqrt(rets.reduce((a, r) => a + (r - mean) ** 2, 0) / rets.length) : 0;
+    return {
+      count: sigs.length, avgReturn: mean, totalReturn: total,
+      winRate: (wins / sigs.length) * 100, wins, losses: sigs.length - wins,
+      sharpe: std > 0 ? (mean / std) * Math.sqrt(252) : 0,
+      bestTrade: Math.max(...rets), worstTrade: Math.min(...rets),
+    };
+  };
+
+  const baseline = computeStats(signals);
+
+  // If filter_a is specified, simulate applying it
+  const simulateFilter = (sigs, filterDef) => {
+    if (!filterDef) return { passed: sigs, blocked: [] };
+    const passed = [], blocked = [];
+    for (const sig of sigs) {
+      let block = false;
+      if (filterDef.rules) {
+        for (const rule of filterDef.rules) {
+          if (rule.direction && sig.direction !== rule.direction) continue;
+          // For backtesting we can only use signal-level data, not regime snapshots
+          // So we test against available signal fields
+          if (rule.feature === 'holdBars' && sig.holdBars) {
+            if (rule.min !== undefined && sig.holdBars < rule.min) { block = true; break; }
+            if (rule.max !== undefined && sig.holdBars > rule.max) { block = true; break; }
+          }
+        }
+      }
+      // Simple return-based simulation for proposed filters
+      if (filterDef.min_return !== undefined && (parseFloat(sig.returnPct) || 0) < filterDef.min_return) block = true;
+      if (block) blocked.push(sig); else passed.push(sig);
+    }
+    return { passed, blocked };
+  };
+
+  const resultA = params.filter_a ? simulateFilter(signals, params.filter_a) : null;
+  const resultB = params.filter_b ? simulateFilter(signals, params.filter_b) : null;
+
+  const result = {
+    description: params.description,
+    timeframe: params.timeframe || 'all',
+    lookback_days: lookbackDays,
+    total_signals: signals.length,
+    baseline,
+    filter_a: resultA ? {
+      definition: params.filter_a,
+      passed: computeStats(resultA.passed),
+      blocked: computeStats(resultA.blocked),
+    } : null,
+    filter_b: resultB ? {
+      definition: params.filter_b,
+      passed: computeStats(resultB.passed),
+      blocked: computeStats(resultB.blocked),
+    } : null,
+    // Per-day breakdown
+    daily_breakdown: (() => {
+      const byDay = {};
+      for (const s of signals) {
+        const day = new Date(s.createdAt).toISOString().split('T')[0];
+        if (!byDay[day]) byDay[day] = [];
+        byDay[day].push(s);
+      }
+      return Object.entries(byDay).map(([day, sigs]) => ({
+        date: day,
+        ...computeStats(sigs),
+      })).sort((a, b) => a.date.localeCompare(b.date));
+    })(),
+  };
+
+  // Format human-readable summary
+  let summary = `📊 BACKTEST RESULTS: ${params.description || 'Filter comparison'}\n`;
+  summary += `Period: ${lookbackDays}d · ${signals.length} ${(params.timeframe || 'all').toUpperCase()} signals\n`;
+  summary += `Baseline: ${baseline.totalReturn.toFixed(2)}% cum, WR ${baseline.winRate.toFixed(1)}%, SR ${baseline.sharpe.toFixed(2)}\n`;
+  if (resultA) {
+    const ps = computeStats(resultA.passed);
+    const bs = computeStats(resultA.blocked);
+    summary += `Filter A: ${resultA.passed.length} pass / ${resultA.blocked.length} blocked → passed ${ps.totalReturn.toFixed(2)}% (SR ${ps.sharpe.toFixed(2)}), blocked avg ${bs.avgReturn.toFixed(3)}%\n`;
+  }
+  if (resultB) {
+    const ps = computeStats(resultB.passed);
+    const bs = computeStats(resultB.blocked);
+    summary += `Filter B: ${resultB.passed.length} pass / ${resultB.blocked.length} blocked → passed ${ps.totalReturn.toFixed(2)}% (SR ${ps.sharpe.toFixed(2)}), blocked avg ${bs.avgReturn.toFixed(3)}%\n`;
+  }
+
+  await client.query(
+    `UPDATE board_requests SET status = 'completed', completed_at = now(), result = $1, result_summary = $2
+     WHERE meeting_id = $3 AND status = 'pending'`,
+    [JSON.stringify(result), summary, meetingId]
+  );
+
+  console.log(`  [Backtest] Complete: ${signals.length} signals, baseline SR ${baseline.sharpe.toFixed(2)}`);
+  return result;
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// DEPLOY — Execute a passed motion (with safety guardrails)
+// ═══════════════════════════════════════════════════════════════
+
+// Major coins that require supermajority (4/5) AND human approval to exclude
+const PROTECTED_COINS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'DOTUSDT', 'LINKUSDT'];
+
+// Actions that require human approval before deployment
+const REQUIRES_HUMAN_APPROVAL = ['EXCLUDE_COIN', 'INCLUDE_COIN', 'EMERGENCY_HALT', 'STRATEGY_PARAMETER'];
+
+async function deployMotion(client, motion, chairId, meetingId, roundNumber) {
+  const type = motion.type;
+  const details = motion.details || {};
+  
+  // Check if this action requires human approval
+  if (REQUIRES_HUMAN_APPROVAL.includes(type)) {
+    // Queue for human approval instead of deploying
+    await client.query(
+      `INSERT INTO board_requests (meeting_id, request_type, description, parameters, status)
+       VALUES ($1, $2, $3, $4, 'pending_approval')`,
+      [meetingId, type, motion.title || `${type}: ${JSON.stringify(details).slice(0, 200)}`,
+       JSON.stringify({ motion, details, chairId, votes_for: motion._supportCount, votes_total: motion._totalVotes })]
+    );
+    console.log(`  ⏸ ${type} queued for HUMAN APPROVAL — will not auto-deploy`);
+    console.log(`    Reason: ${type} is a protected action that requires manual confirmation`);
+    return false; // Not deployed — pending approval
+  }
+  
+  switch (type) {
+    case 'ADD_REGIME_FILTER': {
+      const tf = details.timeframe || 'all';
+      await client.query(
+        `INSERT INTO board_filters (filter_type, feature, conditions, rationale, proposed_by, meeting_id, timeframe)
+         VALUES ('regime', $1, $2, $3, $4, $5, $6)`,
+        [details.feature || 'unknown', JSON.stringify(details), motion.hypothesis || motion.title, chairId, meetingId, tf]
+      );
+      console.log(`  ✅ Filter deployed: ${details.feature} [${tf.toUpperCase()} signals]`);
+      return true;
+    }
+    case 'REMOVE_REGIME_FILTER': {
+      if (details.filter_id) {
+        await client.query(`UPDATE board_filters SET active = false, updated_at = now() WHERE id = $1`, [details.filter_id]);
+        console.log(`  ✅ Filter removed: #${details.filter_id}`);
+        return true;
+      }
+      return false;
+    }
+    case 'EXCLUDE_COIN': {
+      if (details.symbol) {
+        await client.query(
+          `INSERT INTO board_coin_overrides (symbol, override_type, parameters, rationale, meeting_id)
+           VALUES ($1, 'exclude', $2, $3, $4)`,
+          [details.symbol, JSON.stringify({ excluded: true }), motion.hypothesis, meetingId]
+        );
+        console.log(`  ✅ Coin excluded: ${details.symbol}`);
+        return true;
+      }
+      return false;
+    }
+    case 'INCLUDE_COIN': {
+      if (details.symbol) {
+        await client.query(
+          `UPDATE board_coin_overrides SET active = false WHERE symbol = $1 AND override_type = 'exclude' AND active = true`,
+          [details.symbol]
+        );
+        console.log(`  ✅ Coin re-included: ${details.symbol}`);
+        return true;
+      }
+      return false;
+    }
+    case 'NEW_REGIME_FEATURE': {
+      await client.query(
+        `INSERT INTO board_research_log (research_type, hypothesis, methodology, result, meeting_id)
+         VALUES ('new_feature', $1, $2, $3, $4)`,
+        [motion.hypothesis, JSON.stringify(details), JSON.stringify({ status: 'proposed' }), meetingId]
+      );
+      console.log(`  ✅ Research initiated: ${details.feature_name || 'new feature'}`);
+      return true;
+    }
+    case 'KILL_RESEARCH': {
+      await client.query(
+        `INSERT INTO board_research_log (research_type, hypothesis, conclusion, status, killed_by, killed_reason, meeting_id)
+         VALUES ('killed', $1, 'Killed by board vote', 'killed', $2, $3, $4)`,
+        [details.research_line, chairId, details.evidence, meetingId]
+      );
+      console.log(`  ✅ Research killed: ${details.research_line}`);
+      return true;
+    }
+    case 'REQUEST_BACKTEST':
+    case 'REQUEST_ANALYSIS': {
+      await client.query(
+        `INSERT INTO board_requests (meeting_id, request_type, description, parameters, status)
+         VALUES ($1, $2, $3, $4, 'pending')`,
+        [meetingId, type, motion.title || details.description || 'Board request',
+         JSON.stringify(details)]
+      );
+      console.log(`  📊 ${type === 'REQUEST_BACKTEST' ? 'Backtest' : 'Analysis'} queued: ${motion.title || details.description}`);
+      // Execute immediately
+      try {
+        await executeBacktest(client, details, meetingId);
+      } catch (err) {
+        console.warn(`  ⚠ Backtest execution failed: ${err.message}`);
+      }
+      return true;
+    }
+    case 'AFFIRM_PATIENCE': {
+      console.log(`  ✅ PATIENCE AFFIRMED: ${details.rationale || motion.title}`);
+      // No system changes — this is a formal "do nothing" vote
+      return true;
+    }
+    case 'EDIT_HERO': {
+      const d = details;
+      // Enforce character limits
+      if ((d.headline || '').length > 40 || (d.subheadline || '').length > 60 ||
+          (d.body_text || '').length > 250 || (d.badge_text || '').length > 30) {
+        console.log(`  ❌ Hero content exceeds character limits`);
+        return false;
+      }
+      // Deactivate previous hero
+      await client.query(`UPDATE board_hero_content SET active = false WHERE active = true`);
+      await client.query(
+        `INSERT INTO board_hero_content
+         (meeting_id, authored_by, badge_text, headline, subheadline, body_text, cta_left, cta_right, active)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true)`,
+        [meetingId, chairId,
+         (d.badge_text || 'LIVE — Signals firing now').slice(0, 30),
+         (d.headline || 'Recursive AI Alpha').slice(0, 40),
+         (d.subheadline || 'Humans built it. The machines took it from here.').slice(0, 60),
+         (d.body_text || '').slice(0, 250),
+         (d.cta_left || 'View Live Signals').slice(0, 25),
+         (d.cta_right || 'See the Evidence').slice(0, 25)]
+      );
+      console.log(`  ✅ Hero content updated by ${chairId}`);
+      return true;
+    }
+    case 'COMPETITION_ENTRY': {
+      // Each board member submitting is handled via the chair — store with chair's ID
+      // In future, allow individual submissions during Phase 4
+      const d = details;
+      if (!d.coin || !d.regime_factor_1 || !d.regime_factor_2) {
+        console.log(`  ❌ Competition entry missing required fields`);
+        return false;
+      }
+      // Get current price for the coin
+      let entryPrice = 0;
+      try {
+        const { rows } = await client.query(
+          `SELECT close FROM "Candle1h" WHERE symbol = $1 ORDER BY timestamp DESC LIMIT 1`,
+          [d.coin]
+        );
+        entryPrice = rows.length > 0 ? parseFloat(rows[0].close) : 0;
+      } catch {}
+      await client.query(
+        `INSERT INTO board_competitions 
+         (meeting_id, round_number, member_id, coin, regime_factor_1, regime_factor_2, hypothesis, statistical_basis, entry_price)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [meetingId, roundNumber, chairId, d.coin, d.regime_factor_1, d.regime_factor_2,
+         d.hypothesis || motion.hypothesis || '', d.statistical_basis || '', entryPrice]
+      );
+      console.log(`  ✅ Competition entry: ${d.coin} + [${d.regime_factor_1}, ${d.regime_factor_2}] by ${chairId}`);
+      return true;
+    }
+    case 'DEPLOY_COIN_STRATEGY': {
+      const d = details;
+      if (!d.symbol || !d.timeframe) {
+        console.log(`  ❌ Coin strategy missing required fields: symbol, timeframe`);
+        return false;
+      }
+      // Validate filter_conditions if provided (optional now — strategy params come from backtest)
+      let filterCond = d.filter_conditions || {};
+      if (typeof filterCond === 'string') {
+        try { filterCond = JSON.parse(filterCond); } catch {
+          console.log(`  ❌ Coin strategy filter_conditions is not valid JSON`);
+          return false;
+        }
+      }
+      const result = await coinStrategyManager.deployCoinStrategy(
+        client, 
+        { ...d, filter_conditions: filterCond },
+        chairId, meetingId,
+        `${motion._supportCount || '?'}/${motion._totalVotes || '?'}`
+      );
+      if (result.success) {
+        console.log(`  ✅ Coin strategy deployed: ${result.strategy_name} (FracmapStrategy id=${result.fracmap_strategy_id})`);
+        console.log(`  ▶ New parallel signal loop will start within 60 seconds`);
+        coinStrategyManager.invalidateCoinStrategyCache();
+        return true;
+      } else {
+        console.log(`  ❌ Coin strategy deployment failed: ${result.error}`);
+        return false;
+      }
+    }
+    case 'DEACTIVATE_COIN_STRATEGY': {
+      const d = details;
+      if (!d.strategy_name) {
+        console.log(`  ❌ Deactivate coin strategy missing strategy_name`);
+        return false;
+      }
+      await coinStrategyManager.deactivateCoinStrategy(
+        client, d.strategy_name, chairId, d.rationale || motion.hypothesis || 'Board voted to deactivate'
+      );
+      coinStrategyManager.invalidateCoinStrategyCache();
+      console.log(`  ✅ Coin strategy deactivated: ${d.strategy_name}`);
+      return true;
+    }
+    case 'COIN_NO_ACTION': {
+      const d = details;
+      if (!d.symbol) {
+        console.log(`  ❌ Coin no-action missing symbol`);
+        return false;
+      }
+      await coinStrategyManager.markCoinReviewedNoAction(
+        client, d.symbol, meetingId
+      );
+      console.log(`  ✅ Coin ${d.symbol} marked as reviewed — no action needed`);
+      return true;
+    }
+    default: {
+      console.log(`  ⏸ ${type} requires manual review`);
+      return false;
+    }
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// FILTER ENGINE (unchanged from v1)
+// ═══════════════════════════════════════════════════════════════
+
+export async function getActiveDirectives() {
+  const client = await pool.connect();
+  try {
+    await ensureTables(client);
+    const { rows: filters } = await client.query(`SELECT *, COALESCE(timeframe, 'all') as timeframe FROM board_filters WHERE active = true ORDER BY created_at`);
+    const { rows: overrides } = await client.query(`SELECT * FROM board_coin_overrides WHERE active = true ORDER BY symbol`);
+    return {
+      filters,
+      excludedCoins: overrides.filter(o => o.override_type === 'exclude').map(o => o.symbol),
+      parameterOverrides: overrides.filter(o => o.override_type === 'parameters').reduce((a, o) => { a[o.symbol] = o.parameters; return a; }, {}),
+    };
+  } finally { client.release(); }
+}
+
+export function checkSignalAgainstFilters(signal, features, filters) {
+  for (const filter of filters) {
+    const conditions = filter.conditions;
+    if (!conditions) continue;
+    
+    // Direction-aware rules
+    if (conditions.rules) {
+      for (const rule of conditions.rules) {
+        if (rule.direction && signal.direction !== rule.direction) continue;
+        const val = features[rule.feature || filter.feature];
+        if (val === undefined) continue;
+        if (rule.min !== undefined && val < rule.min) return { pass: false, blocked_by: `${filter.feature}: ${rule.label || ''} (${val})` };
+        if (rule.max !== undefined && val > rule.max) return { pass: false, blocked_by: `${filter.feature}: ${rule.label || ''} (${val})` };
+      }
+    }
+    
+    // Simple threshold
+    const featureValue = features[conditions.feature || filter.feature];
+    if (featureValue === undefined) continue;
+    if (conditions.min !== undefined && featureValue < conditions.min) return { pass: false, blocked_by: `${filter.feature} < ${conditions.min}` };
+    if (conditions.max !== undefined && featureValue > conditions.max) return { pass: false, blocked_by: `${filter.feature} > ${conditions.max}` };
+  }
+  return { pass: true, blocked_by: null };
+}
+
+// Manual trigger — bypasses the 30-min dedup guard
+export async function triggerMeeting() {
+  console.log(`[board] ⚡ Manual meeting trigger — bypassing dedup guard`);
+  manualTrigger = true;
+  try {
+    const result = await runBoardMeeting();
+    return result;
+  } finally {
+    manualTrigger = false;
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// SCHEDULER — aligned to top of each hour, no overlapping meetings
+// ═══════════════════════════════════════════════════════════════
+
+const MEETING_INTERVAL = parseInt(process.env.BOARD_MEETING_INTERVAL_MS || String(60 * 60 * 1000));
+let meetingInProgress = false;
+let manualTrigger = false;
+
+async function runScheduledMeeting() {
+  if (meetingInProgress) {
+    console.log(`[board] ⏳ Meeting already in progress, skipping this tick`);
+    return;
+  }
+  meetingInProgress = true;
+  try {
+    console.log(`\n[board] Scheduled meeting starting...`);
+    const result = await runBoardMeeting();
+    console.log(`[board] Result:`, JSON.stringify(result, null, 2));
+  } catch (err) {
+    console.error(`[board] Meeting error:`, err);
+  } finally {
+    meetingInProgress = false;
+  }
+}
+
+function msUntilNextHour() {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(next.getHours() + 1, 0, 30, 0); // XX:00:30 — 30s past the hour for clean data
+  return next.getTime() - now.getTime();
+}
+
+async function start() {
+  console.log(`\n╔══════════════════════════════════════════════════════════════╗`);
+  console.log(`║  NTLGNC LLM STRATEGY BOARD v2 — 8-Phase Protocol           ║`);
+  console.log(`║  ${BOARD_MEMBERS.length} members · ${Object.keys(MOTION_TYPES).length} motion types · ${MEETING_INTERVAL / 60000}min interval     ║`);
+  console.log(`╚══════════════════════════════════════════════════════════════╝\n`);
+  
+  if (!OPENROUTER_KEY) {
+    console.error(`[board] ❌ OPENROUTER_API_KEY not set in .env`);
+    process.exit(1);
+  }
+  
+  console.log(`  Models:`);
+  for (const m of BOARD_MEMBERS) console.log(`    ${m.id.padEnd(10)} → ${m.model}`);
+  
+  const client = await pool.connect();
+  try { await ensureTables(client); console.log(`[board] Database ready`); } finally { client.release(); }
+  
+  // Run first meeting immediately (10s delay for startup)
+  const INITIAL_DELAY = parseInt(process.env.BOARD_INITIAL_DELAY_MS || String(10 * 1000));
+  console.log(`[board] First meeting in ${INITIAL_DELAY / 1000}s...`);
+  setTimeout(runScheduledMeeting, INITIAL_DELAY);
+  
+  // Then align to the top of each hour
+  const waitMs = msUntilNextHour();
+  console.log(`[board] Next hourly meeting in ${(waitMs / 60000).toFixed(1)}min (at top of hour)`);
+  setTimeout(() => {
+    // Run the first hourly meeting
+    runScheduledMeeting();
+    // Then repeat every hour
+    setInterval(runScheduledMeeting, MEETING_INTERVAL);
+  }, waitMs);
+
+  // Poll for manual trigger file every 5 seconds
+  const fs = await import('fs');
+  const triggerFile = new URL('trigger-meeting.flag', import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1');
+  console.log(`[board] Watching for manual trigger: ${triggerFile}\n`);
+  setInterval(async () => {
+    try {
+      if (fs.existsSync(triggerFile)) {
+        fs.unlinkSync(triggerFile);
+        if (meetingInProgress) {
+          console.log(`[board] ⚡ Manual trigger detected but meeting already in progress — ignoring`);
+          return;
+        }
+        console.log(`[board] ⚡ Manual trigger detected — starting meeting now`);
+        manualTrigger = true;
+        meetingInProgress = true;
+        try {
+          const result = await runBoardMeeting();
+          // Write result to a response file
+          fs.writeFileSync(triggerFile + '.result', JSON.stringify(result));
+          console.log(`[board] ⚡ Manual meeting complete`);
+        } catch (err) {
+          console.error(`[board] ⚡ Manual meeting error:`, err);
+          fs.writeFileSync(triggerFile + '.result', JSON.stringify({ error: err.message }));
+        } finally {
+          manualTrigger = false;
+          meetingInProgress = false;
+        }
+      }
+    } catch {}
+  }, 5000);
+}
+
+// Only auto-start when run directly, not when imported by trigger
+// When run directly: node llm-board.js → process.argv[1] ends with 'llm-board.js'
+// When imported by trigger: process.argv includes '-e' flag
+const isDirectRun = process.argv[1] && !process.argv.includes('-e') && !process.argv.includes('--eval');
+if (isDirectRun) {
+  start().catch(err => { console.error('[board] Fatal:', err); process.exit(1); });
+}

@@ -1,6 +1,7 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import path from "path";
+import { validateAdminRequest, unauthorizedResponse } from "@/lib/admin-auth";
 
 // Path to the backend config file
 const CONFIG_PATH = path.join(process.cwd(), "..", "backend", "model-config.json");
@@ -30,12 +31,14 @@ function readConfig() {
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  if (!validateAdminRequest(req)) return unauthorizedResponse();
   const config = readConfig();
   return NextResponse.json(config);
 }
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
+  if (!validateAdminRequest(req)) return unauthorizedResponse();
   try {
     const body = await req.json();
     const { disabled, enabledForDebate, disabledCoins, loopIntervalMinutes } = body;

@@ -3,6 +3,7 @@ import { exec, spawn } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import { Pool } from "pg";
+import { validateAdminRequest, unauthorizedResponse } from "@/lib/admin-auth";
 
 const execAsync = promisify(exec);
 const BACKEND_DIR = path.resolve(process.cwd(), "..", "backend");
@@ -85,6 +86,42 @@ const COMMANDS: Record<string, {
   },
 
   // ── Backend lifecycle (supervisor) ──
+  supervisor: {
+    cmd: "node supervisor.cjs",
+    cwd: BACKEND_DIR,
+    daemon: true,
+    killPattern: "supervisor.cjs",
+  },
+  stop_supervisor: {
+    cmd: "echo stopped",
+    cwd: BACKEND_DIR,
+    killPattern: "supervisor.cjs",
+  },
+  // Stop ALL backend (supervisor + individual processes)
+  stop_all_backend: {
+    cmd: "echo stopped",
+    cwd: BACKEND_DIR,
+    killPattern: "live-fetch|live-signals|llm-board|supervisor|research-cron",
+  },
+
+  // ── LLM Strategy Board ──
+  llm_board: {
+    cmd: "node llm-board.js",
+    cwd: BACKEND_DIR,
+    daemon: true,
+    killPattern: "llm-board",
+  },
+  stop_llm_board: {
+    cmd: "echo stopped",
+    cwd: BACKEND_DIR,
+    killPattern: "llm-board",
+  },
+  trigger_meeting: {
+    cmd: "node trigger-meeting.cjs",
+    cwd: BACKEND_DIR,
+    timeout: 300000,
+  },
+
   restart_backend: {
     cmd: "node supervisor-win.js",
     cwd: BACKEND_DIR,
@@ -107,6 +144,16 @@ const COMMANDS: Record<string, {
     cmd: "node robustness-cron.js",
     cwd: BACKEND_DIR,
     daemon: true,
+  },
+  research_cron: {
+    cmd: "node research-cron.cjs",
+    cwd: BACKEND_DIR,
+    daemon: true,
+  },
+  stop_research_cron: {
+    cmd: "echo stopped",
+    cwd: BACKEND_DIR,
+    killPattern: "research-cron",
   },
 
   // ── Utilities ──
@@ -132,20 +179,29 @@ const COMMANDS: Record<string, {
  */
 async function killByPattern(pattern: string): Promise<string> {
   try {
-    const { stdout } = await execAsync(
-      `wmic process where "name='node.exe' and commandline like '%${pattern}%'" get processid /format:list`,
-      { timeout: 5000 }
-    );
-    const pids = (stdout.match(/ProcessId=(\d+)/g) || []).map(s => s.split("=")[1]);
-    const myPid = String(process.pid);
-    const toKill = pids.filter(pid => pid !== myPid);
+    // Handle pipe-separated patterns (e.g. "live-fetch|live-signals|llm-board")
+    const patterns = pattern.split("|").map(p => p.trim()).filter(Boolean);
+    let totalKilled = 0;
+    const killedPids: string[] = [];
+    
+    for (const pat of patterns) {
+      try {
+        const { stdout } = await execAsync(
+          `wmic process where "name='node.exe' and commandline like '%${pat}%'" get processid /format:list`,
+          { timeout: 5000 }
+        );
+        const pids = (stdout.match(/ProcessId=(\d+)/g) || []).map(s => s.split("=")[1]);
+        const myPid = String(process.pid);
+        const toKill = pids.filter(pid => pid !== myPid && !killedPids.includes(pid));
 
-    if (toKill.length === 0) return "No matching processes found.";
-
-    for (const pid of toKill) {
-      try { await execAsync(`taskkill /F /PID ${pid}`, { timeout: 3000 }); } catch {}
+        for (const pid of toKill) {
+          try { await execAsync(`taskkill /F /PID ${pid}`, { timeout: 3000 }); killedPids.push(pid); totalKilled++; } catch {}
+        }
+      } catch {}
     }
-    return `Killed ${toKill.length} process(es) — PID ${toKill.join(", ")}`;
+
+    if (totalKilled === 0) return "No matching processes found.";
+    return `Killed ${totalKilled} process(es) — PID ${killedPids.join(", ")}`;
   } catch (err: any) {
     return `Kill scan: ${err.message?.slice(0, 80) || "no matches"}`;
   }
@@ -156,35 +212,92 @@ async function killByPattern(pattern: string): Promise<string> {
  */
 async function isProcessRunning(pattern: string): Promise<boolean> {
   try {
+    // Linux: use pgrep to find node processes matching the pattern
     const { stdout } = await execAsync(
-      `wmic process where "name='node.exe' and commandline like '%${pattern}%'" get processid /format:list`,
+      `pgrep -f "${pattern}" 2>/dev/null || true`,
       { timeout: 5000 }
     );
-    const pids = (stdout.match(/ProcessId=(\d+)/g) || []).map(s => s.split("=")[1]);
+    const pids = stdout.trim().split("\n").filter(Boolean);
     const myPid = String(process.pid);
     return pids.filter(pid => pid !== myPid).length > 0;
   } catch {
-    return false;
+    // Fallback for Windows
+    try {
+      const { stdout } = await execAsync(
+        `wmic process where "name='node.exe' and commandline like '%${pattern}%'" get processid /format:list`,
+        { timeout: 5000 }
+      );
+      const pids = (stdout.match(/ProcessId=(\d+)/g) || []).map(s => s.split("=")[1]);
+      const myPid = String(process.pid);
+      return pids.filter(pid => pid !== myPid).length > 0;
+    } catch {
+      return false;
+    }
   }
 }
 
 export async function GET() {
   // Health check endpoint — returns status of all services
   try {
-    const [liveFetch, liveSignals, liveHourly, liveDaily] = await Promise.all([
+    const [liveFetch, liveSignals, liveHourly, liveDaily, supervisor, llmBoard, researchCron] = await Promise.all([
       isProcessRunning("live-fetch.cjs"),
       isProcessRunning("live-signals.cjs"),
       isProcessRunning("live-fetch-hourly"),
       isProcessRunning("live-fetch-daily"),
+      isProcessRunning("supervisor.cjs"),
+      isProcessRunning("llm-board"),
+      isProcessRunning("research-cron"),
     ]);
 
     // Check data freshness
-    const [candle1m, candle1h, candle1d, signals] = await Promise.all([
+    const [candle1m, candle1h, candle1d, signals, boardMeeting] = await Promise.all([
       pool.query(`SELECT MAX(timestamp) as latest, COUNT(DISTINCT symbol) as coins FROM "Candle1m" WHERE timestamp > NOW() - INTERVAL '10 minutes'`).catch(() => ({ rows: [{ latest: null, coins: 0 }] })),
       pool.query(`SELECT MAX(timestamp) as latest, COUNT(DISTINCT symbol) as coins FROM "Candle1h" WHERE timestamp > NOW() - INTERVAL '3 hours'`).catch(() => ({ rows: [{ latest: null, coins: 0 }] })),
       pool.query(`SELECT MAX(timestamp) as latest, COUNT(DISTINCT symbol) as coins FROM "Candle1d" WHERE timestamp > NOW() - INTERVAL '2 days'`).catch(() => ({ rows: [{ latest: null, coins: 0 }] })),
       pool.query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE status = 'open') as open, MAX("createdAt") as latest FROM "FracmapSignal"`).catch(() => ({ rows: [{ total: 0, open: 0, latest: null }] })),
+      pool.query(`SELECT id, round_number, phase, decision, created_at, duration_ms, total_tokens FROM board_meetings ORDER BY created_at DESC LIMIT 1`).catch(() => ({ rows: [] })),
     ]);
+
+    // Signal health — per-timeframe breakdown for 1h, 6h, 24h windows
+    let signalHealth = null;
+    try {
+      const { rows: shRows } = await pool.query(`
+        SELECT 
+          s."barMinutes",
+          f.status,
+          COUNT(*) FILTER (WHERE f."createdAt" > now() - interval '1 hour')::int as last_1h,
+          COUNT(*) FILTER (WHERE f."createdAt" > now() - interval '6 hours')::int as last_6h,
+          COUNT(*) FILTER (WHERE f."createdAt" > now() - interval '24 hours')::int as last_24h
+        FROM "FracmapSignal" f
+        JOIN "FracmapStrategy" s ON f."strategyId" = s.id
+        WHERE f."createdAt" > now() - interval '24 hours'
+        GROUP BY s."barMinutes", f.status
+        ORDER BY s."barMinutes", f.status
+      `);
+      
+      // Open positions with soonest close
+      const { rows: openPos } = await pool.query(`
+        SELECT s."barMinutes", COUNT(*)::int as count,
+               MIN(f."createdAt") as oldest,
+               MIN(f."holdBars") as min_hold
+        FROM "FracmapSignal" f
+        JOIN "FracmapStrategy" s ON f."strategyId" = s.id
+        WHERE f.status = 'open'
+        GROUP BY s."barMinutes"
+        ORDER BY s."barMinutes"
+      `);
+      
+      // Active filter stats
+      const { rows: filterStats } = await pool.query(`
+        SELECT COUNT(*)::int as active_filters,
+               SUM(trades_filtered)::int as total_filtered,
+               SUM(trades_passed)::int as total_passed
+        FROM board_filters WHERE active = true
+      `);
+      
+      signalHealth = { byTimeframe: shRows, openPositions: openPos, filters: filterStats[0] || { active_filters: 0, total_filtered: 0, total_passed: 0 } };
+    } catch {}
+
 
     return NextResponse.json({
       processes: {
@@ -192,12 +305,17 @@ export async function GET() {
         live_signals: liveSignals,
         live_fetch_hourly: liveHourly,
         live_fetch_daily: liveDaily,
+        supervisor,
+        llm_board: llmBoard,
+        research_cron: researchCron,
       },
       data: {
         candle1m: { latest: candle1m.rows[0]?.latest, recentCoins: parseInt(candle1m.rows[0]?.coins) || 0 },
         candle1h: { latest: candle1h.rows[0]?.latest, recentCoins: parseInt(candle1h.rows[0]?.coins) || 0 },
         candle1d: { latest: candle1d.rows[0]?.latest, recentCoins: parseInt(candle1d.rows[0]?.coins) || 0 },
         signals: { total: parseInt(signals.rows[0]?.total) || 0, open: parseInt(signals.rows[0]?.open) || 0, latest: signals.rows[0]?.latest },
+        board: boardMeeting.rows[0] || null,
+        signalHealth,
       },
     });
   } catch (e: any) {
@@ -206,6 +324,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  if (!validateAdminRequest(req)) return unauthorizedResponse();
   let body;
   try { body = await req.json(); } catch { return NextResponse.json({ error: "Bad JSON" }, { status: 400 }); }
   
@@ -232,7 +351,7 @@ export async function POST(req: NextRequest) {
         cwd: def.cwd,
         detached: true,
         stdio: "ignore",
-        shell: true,
+        shell: false,
         env: { ...process.env },
       });
       child.unref();

@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { Client } from "pg";
+import { validateAdminRequest, unauthorizedResponse } from "@/lib/admin-auth";
 
 const DB_URL = process.env.DATABASE_URL;
 
@@ -9,7 +10,8 @@ async function getClient() {
   return client;
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  if (!validateAdminRequest(req)) return unauthorizedResponse();
   if (!DB_URL) return NextResponse.json({ error: "No DATABASE_URL" }, { status: 500 });
 
   const client = await getClient();
